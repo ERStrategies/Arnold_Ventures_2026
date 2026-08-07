@@ -1,0 +1,1888 @@
+---
+title: "4_Analysis_Transcript_Snipets"
+author: "Simon Ellis"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3   # Customize the depth of the table of contents for HTML document
+    toc_float:
+      collapsed: true    # Start with the table of contents expanded
+      smooth_scroll: true  # Enable smooth scrolling
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+  output_dir = "knitted files", output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and connect to Sharepoint
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+# Part 1: Transcript Analysis Examples
+
+-   **What:** Transcript Analysis can look different in every district given the very specific analytic questions and types of course analyses that are possible with different kinds of data. Across transcript projects ERS has completed so far, we have looked at credit attainment, advanced course taking, pathway course taking, 9th grade on track status, and post-secondary student outcomes, just to name a few! The following snipets of code are meant to serve as inspiration and examples for your team as you build out your analysis script.
+
+-   [**You will NOT be able to run your data through these scripts as they are not ERS standardized or set to one district. Rather, the scripts below serve as logic examples of how you might do certain kinds of analyses we have done at ERS so far.**]{.underline} For more support, reach out to the SDPA methods captains, or R experts in transcript analysis (Rebel, Simon, Valentina).
+
+## 1.1 Pathway Completers Analysis
+
+-   **Example:** Manor ISD
+
+-   **Analytic Question:** How many students fall into each bucket of pathway completion (participant, explorer, concentrator, and completer) based on TEA requirements for each level?
+
+```{r}
+#convert course level to numeric but selecting only the last character (which is the number)
+cohort_pathways_table <- cohort_pathways_table %>%
+  mutate(C_pathway_course_level = case_when(
+    C_pathway_course_level == "Level 1" ~ 1,
+    C_pathway_course_level == "Level 2" ~ 2,
+    C_pathway_course_level == "Level 3" ~ 3,
+    C_pathway_course_level == "Level 4" ~ 4))
+
+cohort_pathways_table <- cohort_pathways_table %>%
+  group_by(D_stu_id, C_pathway, D_course_id) %>% 
+  mutate(
+    H_passed_full_pathway_course = if_else(
+      any(C_earned_credits >= 0.5), 
+      1, 
+      0
+    )
+  ) %>%
+  ungroup() %>% 
+  mutate(H_pathway_course_level_passed = if_else(H_passed_full_pathway_course == 1, C_pathway_course_level, 0)) %>%
+  ungroup() %>% 
+  group_by(D_stu_id, C_pathway) %>% 
+  mutate(H_max_course_level_passed = max(H_pathway_course_level_passed, na.rm = TRUE)) %>% 
+  mutate(H_total_creds_earn_pathway = sum(C_earned_credits, na.rm = TRUE)) %>%
+  ungroup() %>% 
+  group_by(D_stu_id) %>% 
+  mutate(H_max_creds_earn = max(H_total_creds_earn_pathway)) %>% 
+  ungroup()
+
+#these INF warnings are a little strange, and I'm not quite sure what they are being caused from but I re-ran the code and that seemed to help, I think its a bit better now
+
+#check student ids
+student_dive <- cohort_pathways_table %>% 
+  filter(D_stu_id == "101216") %>% 
+  select(D_stu_id, D_course_name.x, C_earned_credits, C_pathway_course_level, C_pathway, H_passed_full_pathway_course, H_pathway_course_level_passed, H_max_course_level_passed)
+
+student_dive_2 <- cohort_pathways_table %>% 
+  filter(D_stu_id == "101282") %>% 
+  select(D_stu_id, D_course_name.x, C_earned_credits, C_pathway_course_level, C_pathway, H_passed_full_pathway_course, H_pathway_course_level_passed, H_max_course_level_passed)
+
+student_dive_3 <- cohort_pathways_table %>% 
+  filter(D_stu_id == "104871") %>% 
+  select(D_stu_id, D_course_name.x, C_earned_credits, C_pathway_course_level, C_pathway, H_passed_full_pathway_course, H_pathway_course_level_passed, H_max_course_level_passed)
+
+#check failure rates of level 3 and 4 courses
+cohort_pathways_table %>% 
+  filter(H_total_creds_earn_pathway >= 4) %>% 
+  filter(C_pathway_course_level %in% c(3, 4)) %>% 
+  summarize(count_passed = sum(ifelse(C_earned_credits == C_credits_fixed, 1, 0)),
+            count_failed = sum(ifelse(C_earned_credits != C_credits_fixed, 1, 0)))
+
+```
+
+```{r}
+#flag pathway statuses
+cohort_pathways_table <- cohort_pathways_table %>% 
+  mutate(C_pathway_status = case_when(
+    H_total_creds_earn_pathway >= 4 & H_max_course_level_passed >= 3 ~ "completer",
+    H_total_creds_earn_pathway >= 2 ~ "concentrator",
+    H_total_pathway_creds_enrolled >= 2 ~ "explorer",
+    H_total_pathway_creds_enrolled > 0 ~ "participant",
+    TRUE ~ NA_character_
+  ))
+
+#return min and max creds earn by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(min_creds_earn = min(H_total_pathway_creds_enrolled),
+            max_creds_earn = max(H_total_pathway_creds_enrolled)) %>%
+  ungroup()
+
+#return min and max creds enrolled by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(min_creds_enrolled = min(H_total_pathway_creds_enrolled),
+            max_creds_enrolled = max(H_total_pathway_creds_enrolled)) %>%
+  ungroup()
+
+
+#counts
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  ungroup()
+ 
+#Create Rollup Field
+#if a student is a completer, do not code them as a concentrator, explorer, or participant for any pathway
+#if a student is a concentrator, do not code them as an explorer, or participant for any pathway
+#if a student is an explorer, do not code them as a participant for any pathway
+cohort_pathways_table <- cohort_pathways_table %>% 
+  group_by(D_stu_id) %>% 
+  mutate(C_pathway_status_roll_up = case_when(
+    any(C_pathway_status == "completer") ~ "completer",
+    any(C_pathway_status == "concentrator") ~ "concentrator",
+    any(C_pathway_status == "explorer") ~ "explorer",
+    any(C_pathway_status == "participant") ~ "participant",
+    TRUE ~ NA_character_
+  )) %>% 
+  ungroup()
+
+#return min and max creds earn by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(min_creds_earn = min(H_total_creds_earn_pathway),
+            max_creds_earn = max(H_total_creds_earn_pathway)) %>%
+  ungroup()
+
+#return min and max creds enrolled by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(min_creds_enrolled = min(H_total_pathway_creds_enrolled),
+            max_creds_enrolled = max(H_total_pathway_creds_enrolled)) %>%
+  ungroup()
+
+#counts
+cohort_pathways_table %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  ungroup()
+
+#how many concentrators earned 4 total pathway credits but did not qualify to be completers
+not_completers_check <- cohort_pathways_table %>% 
+  filter(C_pathway_status_roll_up == "concentrator" & H_total_pathway_creds_earned >= 4)
+#distinct count
+not_completers_check %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+
+#how many concentrators earned 4 pathway credits in same pathway, but did not qualify to be completers because they did not pass a level 3 or 4 course
+cohort_pathways_table %>% 
+  filter(C_pathway_status_roll_up == "concentrator" & H_total_creds_earn_pathway >= 4) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#how many did not earn 4 pathway credits total
+cohort_pathways_table %>% 
+  filter(C_pathway_status_roll_up == "concentrator" & H_total_pathway_creds_earned < 4) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+```
+
+## 1.2 Course Modalities Analysis
+
+-   **Example:** Denver Public Schools
+
+-   **Analytic Question:** We want to understand more about course sequences that students often take in key areas (like Math, Science, or ELA), and also understand how course offerings differ by school and compare to graduation requirements. For example, if you need 4 math credits to graduate, how many unique math classes are available to you to take to fulfill those options?
+
+```{r}
+
+#total distinct students enrolled in a math course in 2021
+cohort_2024 %>% 
+  filter(D_year == "2021") %>% 
+  filter(C_subject == "Math") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+
+#unique math courses in 9th grade arranged by popularity
+cohort_2024 %>% 
+  filter(D_year == "2021") %>% 
+  filter(C_subject == "Math") %>%       # Filter for Math courses
+  mutate(D_course_name_clean = str_replace_all(D_course_name, "(S1|S2|Semester 1|Semester 2)", "")) %>% # Removes S1 or S2 from course titles
+  group_by(D_course_name_clean) %>% 
+  summarise(distinct_students = n_distinct(D_stu_id)) %>%      # Count distinct students per course
+  arrange(desc(distinct_students)) %>% 
+  print()
+
+
+#So Integrated Math I, Integrated Math II Honors, Geometry Honors, and Algebra I are the most popular, and make up 80% of all freshman year math enrollments, so we are going to focus on those courses.
+
+
+#create a new data-frame to make this process easier
+
+# Step 1: Filter by Subject (e.g., Math)
+math_courses <- cohort_2024 %>%
+  filter(C_subject == "Math")  # Filter to only include Math courses
+
+# Step 2: Remove semester labels from course names
+# This assumes that the semester labels are in the format "S1", "S2"
+math_courses <- math_courses %>%
+  mutate(D_course_name = str_replace_all(D_course_name, "(?i) s[12]", ""))
+
+# Step 3: Group by student and year
+# This will ensure that within the same year, multiple courses are sorted alphabetically
+math_courses_clean <- math_courses %>%
+  group_by(D_stu_id, D_year) %>%
+  summarise(sorted_courses = paste(sort(unique(D_course_name)), collapse = ", ")) %>%
+  ungroup()
+
+# View the final output
+print(math_courses_clean)
+
+
+#okay, that looks great. Now I will want to pivot that wider so that each student is a row, and each column is 1 year of their math course taking 
+math_progression_analysis <- math_courses_clean %>%
+  pivot_wider(names_from = D_year, values_from = sorted_courses) %>%
+  print()
+
+#great! Now we can start the analysis using the 2021 most popular courses
+
+```
+
+### a. 2022 Progression
+
+```{r}
+#How many distinct students with any math enrollment in 2022
+cohort_2024 %>% 
+  filter(C_subject == "Math") %>%
+  filter(D_year == "2022") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#before we start, how many took Integrated Math I in 2021?
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+####Integrated Math I####
+#First, for each course, see how many students have ANY subsequent enrollment in 2022
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(!is.na(`2022`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+#1,114, so 77%, which means 23% didn't take a 2022 math course, which is weird..., or maybe its a tagging thing? Can talk about how to approach with RK
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  # filter to students who took "Integrated Math 1" in 2021
+  group_by(`2022`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2022)) %>% 
+  print()
+  
+  
+####Integrated Math II Honors####
+  
+  #before we start, how many took Integrated Math II in 2021?
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+  
+  #360
+  
+  #First, for each course, see how many students have ANY subsequent enrollment in 2022
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(!is.na(`2022`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # filter to students who took "Integrated Math 1" in 2021
+  group_by(`2022`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2022)) %>% 
+  print()
+  
+  ####Geometry Honors####
+  
+    #before we start, how many took Integrated Math II in 2021?
+math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+  
+  
+  #First, for each course, see how many students have ANY subsequent enrollment in 2022
+math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(!is.na(`2022`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  # filter to students who took "Integrated Math 1" in 2021
+  group_by(`2022`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2022)) %>% 
+  print()
+
+  
+    ####Algebra I####
+  #First, for each course, see how many students have ANY subsequent enrollment in 2022
+math_progression_analysis %>%
+  filter(`2021` == "Algebra 1") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(!is.na(`2022`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Algebra 1") %>%  # filter to students who took "Integrated Math 1" in 2021
+  group_by(`2022`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2022 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2022)) %>% 
+  print()
+
+
+
+```
+
+### b. 2023 Progression
+
+```{r}
+#at this level, before going further, rename all courses starting with "DE" or "CE" to be "Dual Credit Math" for simplicity
+math_progression_analysis <- math_progression_analysis %>%
+  mutate(across(everything(), ~ if_else(str_starts(.x, "DE") | str_starts(.x, "CE"), 
+                                        "Dual Credit Math", .x)))
+
+
+####Integrated Math I Pathway####
+#This time, going to have to filter for students who meet ALL conditions, and follow the path of each spoke. For example, a student who took Int math 1 in 9th grade mostly went into Int Math 2, and Int Math 2 honors, so we follow those spokes
+
+
+#First, for each course, see how many students have ANY subsequent enrollment in 2023
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Integrated Math 2") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+#685, so only 32 students don't have a math enrollment from that pathway in 2023, which is good!
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  # filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Integrated Math 2") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+  
+  #Int Math 1, 2 Honors
+  
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+#685, so only 32 students don't have a math enrollment from that pathway in 2023, which is good!
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  # filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+
+
+####Integrated Math II Honors Pathway#####
+#First, for each course, see how many students have ANY subsequent enrollment in 2023
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Integrated Math 3 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+#210, so no students stopped taking math! w0w!
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Integrated Math 3 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+  
+  
+  #First, for each course, see how many students have ANY subsequent enrollment in 2023
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "IB Math") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "IB Math") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+  
+    #First, for each course, see how many students have ANY subsequent enrollment in 2023
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Algebra Advanced 2 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Algebra Advanced 2 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+  
+  
+  ####Geometry Honors Pathway#####
+#First, for each course, see how many students have ANY subsequent enrollment in 2023
+math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Algebra Advanced 2 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+#169/182, not bad 
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+   filter(`2021` == "Geometry Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Algebra Advanced 2 Honors") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+  
+  
+  #First, for each course, see how many students have ANY subsequent enrollment in 2023
+math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Algebra Advanced 2") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  filter(!is.na(`2023`)) %>%  # Ensure there are courses taken in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%  # Count distinct students in 2022
+  print()
+
+#25/25, great
+
+#Choose a specific course, e.g., 'Algebra 1 S1', and filter to see 2022 courses
+  math_progression_analysis %>%
+   filter(`2021` == "Geometry Honors") %>%  # Filter to students who took "Integrated Math 1" in 2021
+  filter(`2022` == "Algebra Advanced 2") %>%  # Filter to students who took "Integrated Math 2" in 2022
+  group_by(`2023`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2023 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2023)) %>% 
+  print()
+  
+  
+  
+  
+
+```
+
+### c. 2024 Progression
+
+```{r}
+#I think I can just go off 11th grade math enrollment, right? Let me check something
+
+#How many students took Integrated Math III in 2023?
+math_progression_analysis %>%
+  filter(`2023` == "Integrated Math 3") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#okay yeah more, because they might come from other math I guess. So it will have to be itterative anyway. Okat lets get started!
+
+
+####Integreated Math I Pathway#####
+
+  #First, for each course, see how many students have ANY subsequent enrollment in 2024
+math_progression_analysis %>%
+   filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2") %>% 
+  filter(`2023` == "Integrated Math 3") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2") %>% 
+  filter(`2023` == "Integrated Math 3") %>%
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+ 
+  #First, for each course, see how many students have ANY subsequent enrollment in 2024
+math_progression_analysis %>%
+   filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2") %>% 
+  filter(`2023` == "Integrated Math 3 Honors") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2") %>% 
+  filter(`2023` == "Integrated Math 3 Honors") %>%
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+
+    #First, for each course, see how many students have ANY subsequent enrollment in 2024
+math_progression_analysis %>%
+   filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2") %>% 
+  filter(`2023` == "Dual Credit Math") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2") %>% 
+  filter(`2023` == "Dual Credit Math") %>%
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+ 
+
+#bit of an experiement, checking to link in "Any other"
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%
+  filter(`2022` == "Integrated Math 2") %>%
+  filter(!`2023` %in% c("Integrated Math 3", "Integrated Math 3 Honors", "IB Math", "Dual Credit Math")) %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+  
+ math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%
+  filter(`2022` == "Integrated Math 2") %>%
+  filter(!`2023` %in% c("Integrated Math 3", "Integrated Math 3 Honors", "IB Math", "Dual Credit Math")) %>% 
+  group_by(`2024`) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>%
+  print()
+ 
+ 
+ 
+    #First, for each course, see how many students have ANY subsequent enrollment in 2024
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2 Honors") %>% 
+  filter(`2023` == "Integrated Math 3") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2 Honors") %>% 
+  filter(`2023` == "Integrated Math 3") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+  
+      #First, for each course, see how many students have ANY subsequent enrollment in 2024
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2 Honors") %>% 
+  filter(`2023` == "Integrated Math 3 Honors") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%  
+  filter(`2022` == "Integrated Math 2 Honors") %>% 
+  filter(`2023` == "Integrated Math 3 Honors") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+ 
+  
+  #and other, NOT in the above (to be MECE)
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%
+  filter(`2022` == "Integrated Math 2 Honors") %>%
+  filter(!`2023` %in% c("Integrated Math 3", "Integrated Math 3 Honors")) %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+  
+ math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 1") %>%
+  filter(`2022` == "Integrated Math 2 Honors") %>%
+  filter(!`2023` %in% c("Integrated Math 3", "Integrated Math 3 Honors")) %>% 
+  group_by(`2024`) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>%
+  print()
+ 
+ 
+ ####Integreated Math II Honors Pathway#####
+       #First, for each course, see how many students have ANY subsequent enrollment in 2024
+math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "Dual Credit Math") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "Dual Credit Math") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "AP Statistics") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "AP Statistics") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+   math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "Pre-Calculus Honors") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "Pre-Calculus Honors") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+ 
+     math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "Pre-Calculus") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "Pre-Calculus") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+  ####Geometry & Other#####
+       math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2 Honors") %>% 
+  filter(`2023` == "Pre-Calculus Honors") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2 Honors") %>% 
+  filter(`2023` == "Pre-Calculus Honors") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+  
+         math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2 Honors") %>% 
+  filter(`2023` == "Pre-Calculus") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2 Honors") %>% 
+  filter(`2023` == "Pre-Calculus") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+  ####OTHER#####
+  
+         math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "IB Math") %>% 
+  filter(`2023` == "IB Calculus") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "IB Math") %>% 
+  filter(`2023` == "IB Calculus") %>%
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+           math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2") %>% 
+  filter(`2023` == "Pre-Calculus") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Geometry Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2") %>% 
+  filter(`2023` == "Pre-Calculus") %>% 
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+ 
+  
+        math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2 Honors") %>% 
+  filter(`2023` == "IB Math: Analys/Apprch 1 SL") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Algebra Advanced 2 Honors") %>% 
+  filter(`2023` == "IB Math: Analys/Apprch 1 SL") %>%
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+  
+  #AP Calculus AB
+  
+         math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "AP Calculus AB") %>% 
+  filter(!is.na(`2024`)) %>%
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  print()
+
+#then check breakdown
+
+  math_progression_analysis %>%
+  filter(`2021` == "Integrated Math 2 Honors") %>%  
+  filter(`2022` == "Integrated Math 3 Honors") %>% 
+  filter(`2023` == "AP Calculus AB") %>%
+  group_by(`2024`) %>% #then look at what classes they took in 2022
+  summarise(num_students_2024 = n_distinct(D_stu_id)) %>%
+  arrange(desc(num_students_2024)) %>% 
+  print()
+
+
+```
+
+## 1.3 Advanced Course Completion
+
+-   **Example:** Denver Public Schools
+
+-   **Analytic Question:** We want to understand more about enrollments in Honors, AP, Dual Enrollment, or IB classes. We can disagregate this by a number of factors including school, grade, and student demographics.
+
+```{r}
+
+#Of all courses with the "Y" for C_AP flag, which are the most enrolled in 2024 by counting unique course enrollments?
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  # Remove "S1" and "S2" from course names
+  mutate(D_course_name_trimmed = str_replace(D_course_name, "\\s*S[1-2]$", "")) %>%
+  group_by(D_course_name_trimmed) %>%
+  summarise(unique_students = n_distinct(D_stu_id), .groups = 'drop') %>%
+  arrange(desc(unique_students)) %>%
+  print()
+
+
+
+#How many total distinct students took an AP course?
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#4371
+
+#how many total students have any rows with D_pass_fail == Fail
+snapshot_2024 %>%
+  filter(D_pass_fail == "Fail") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#Lets give those students a flag on all of their rows called "C_any_fail"
+snapshot_2024 <- snapshot_2024 %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_fail = ifelse(any(D_pass_fail == "Fail"), "Y", "N")) %>%
+  ungroup()
+
+#count the flag to make sure it worked correctly
+snapshot_2024 %>%
+  filter(C_any_fail == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#how many students have any AP enrollment?
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#Lets give those students a flag called "C_any_ap"
+snapshot_2024 <- snapshot_2024 %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_ap = ifelse(any(C_AP_flag == "Y"), "Y", "N")) %>%
+  ungroup()
+
+
+#number of AP courses by school
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  # Remove "S1" and "S2" from course names
+  mutate(D_course_name_trimmed = str_replace(D_course_name, "\\s*S[1-2]$", "")) %>%
+  group_by(D_location_name) %>%
+  summarise(unique_courses = n_distinct(D_course_name_trimmed), .groups = 'drop') %>%
+  print()
+
+#and count the number of students with the flag to make sure it worked
+snapshot_2024 %>%
+  filter(C_any_ap == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#great. How many students with C_any_ap by school?
+snapshot_2024 %>%
+  filter(C_any_ap == "Y") %>%
+filter(D_stu_grade %in% c("11", "12")) %>%   # Filter for 11th OR 12th grade
+  group_by(D_location_name) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+
+#how many students have any IB enrollment?
+snapshot_2024 %>%
+  filter(C_IB_flag == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#Lets give those students a flag called "C_any_ib"
+snapshot_2024 <- snapshot_2024 %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_ib = ifelse(any(C_IB_flag == "Y"), "Y", "N")) %>%
+  ungroup()
+
+#and count the number of students with the flag to make sure it worked
+snapshot_2024 %>%
+  filter(C_any_ib == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#count of students with any IB by home school
+snapshot_2024 %>%
+  filter(C_any_ib == "Y") %>%
+  filter(D_stu_grade %in% c("11", "12")) %>%   # Filter for 11th OR 12th grade
+  group_by(D_location_name) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#number of IB courses by school
+snapshot_2024 %>%
+  filter(C_IB_flag == "Y") %>%
+  # Remove "S1" and "S2" from course names
+  mutate(D_course_name_trimmed = str_replace(D_course_name, "\\s*S[1-2]$", "")) %>%
+  group_by(D_location_name) %>%
+  summarise(unique_courses = n_distinct(D_course_name_trimmed), .groups = 'drop') %>%
+  print()
+
+
+#how many students have any dual enrollment enrollment?
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#Lets give those students a flag called "C_any_dual_enrollment"
+snapshot_2024 <- snapshot_2024 %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_dual_enrollment = ifelse(any(C_dual_credit_flag == "Y"), "Y", "N")) %>%
+  ungroup()
+
+#and count the number of students with the flag to make sure it worked
+snapshot_2024 %>%
+  filter(C_any_dual_enrollment == "Y") %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print()
+
+#how many students with any dual enrollment by school
+snapshot_2024 %>%
+  filter(C_any_dual_enrollment == "Y") %>%
+  filter(D_stu_grade %in% c("11", "12")) %>%   # Filter for 11th OR 12th grade
+  group_by(D_location_name) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#number of DC courses by school
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%
+  # Remove "S1" and "S2" from course names
+  mutate(D_course_name_trimmed = str_replace(D_course_name, "\\s*S[1-2]$", "")) %>%
+  group_by(D_location_name) %>%
+  summarise(unique_courses = n_distinct(D_course_name_trimmed), .groups = 'drop') %>%
+  print()
+
+
+#Need to fix the honors flag, if any row has a "Y" for honors, that row needs to be mutated in the course rigor column to be standard
+snapshot_2024 <- snapshot_2024 %>%
+  mutate(C_rigor = ifelse(C_honors_flag == "Y", "Standard", C_rigor)) %>%
+  ungroup()
+
+#great, now if a student has any row with "above standard" for rigor, give that student a new flag called C_any_above_standard
+snapshot_2024 <- snapshot_2024 %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_above_standard = ifelse(any(C_rigor == "Above Standard"), "Y", "N")) %>%
+  ungroup()
+
+#and how many with any above standard versus not?
+snapshot_2024 %>%
+  group_by(C_any_above_standard) %>%
+  distinct(D_stu_id) %>%
+  count() %>% 
+  print() %>% 
+  ungroup()
+
+#how many with any above standard by school?
+snapshot_2024 %>%
+  filter(C_any_above_standard == "Y") %>%
+  group_by(D_location_name) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#Now, of students who enrolled in an AP course (have any rows C_AP_flag = "Y"), how many of them are Y for C_any_fail versus N?
+snapshot_2024 %>%
+  filter(C_any_ap == "Y") %>%  # Filter for students who enrolled in an AP course
+  group_by(D_stu_id) %>%  # Group by student ID
+  summarise(
+    any_fail_Y = any(C_any_fail == "Y"),  # Check if there's any "Y" for this student
+    any_fail_N = any(C_any_fail == "N"),  # Check if there's any "N" for this student
+    .groups = 'drop'
+  ) %>%
+  summarise(
+    count_Y = sum(any_fail_Y),  # Count distinct students who have any "Y"
+    count_N = sum(any_fail_N)   # Count distinct students who have any "N"
+  ) %>%
+  print()
+
+#and now the reverse
+snapshot_2024 %>%
+  filter(C_any_ap == "N") %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    any_fail_Y = any(C_any_fail == "Y"),
+    any_fail_N = any(C_any_fail == "N"),
+    .groups = 'drop'
+  ) %>%
+  summarise(
+    count_Y = sum(any_fail_Y),
+    count_N = sum(any_fail_N)
+  ) %>%
+  print()
+
+
+#Lets look at some race/ethnicity statistics
+#How many students, by race/ethnicity rollup, enrolled in Any AP courses in 2024?
+
+#create rollup
+snapshot_2024 <- snapshot_2024 %>%
+  mutate(race_rollup = case_when(
+    D_stu_race %in% c("Multiple races", "Asian", "American Indian or Alaskan Native", "Native Hawaiian or Other Pacific Islander") ~ "All Other Groups",
+    TRUE ~ D_stu_race
+  ))
+
+#enrollment rates by race/ethnicity
+snapshot_2024 %>%
+  group_by(C_any_ap, race_rollup) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+ 
+#yeah wow, super segregated. Okay
+
+#Count the distinct number of AP Courses offered by Location, and the % of Black & Hispanic Students out of all enrollment at those schools
+# Assuming your data frame is named 'df'
+
+# 1. Calculate the number of distinct AP courses offered per location
+ap_courses_count <- snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  group_by(D_location_name) %>%
+  summarize(Number_of_AP_Courses = n_distinct(D_course_name)) %>% 
+  print()
+
+#then, by location, get race/ethnicity rollup percentages
+total_students <- snapshot_2024 %>%
+  group_by(D_location_name) %>%
+  summarize(Total_Students = n_distinct(D_stu_id))
+
+# Calculate the count of students by race per location
+race_counts <- snapshot_2024 %>%
+  group_by(D_location_name, race_rollup) %>%
+  summarize(Student_Count = n_distinct(D_stu_id)) %>%
+  ungroup()
+
+# Join the counts with total students to calculate percentages
+race_percentages <- race_counts %>%
+  left_join(total_students, by = "D_location_name") %>%
+  mutate(Percentage = (Student_Count / Total_Students) * 100) %>%
+  select(D_location_name, race_rollup, Percentage)
+
+# View the result
+print(race_percentages)
+
+#Okay, now join the race_percentages data frame with the ap_courses_count data frame
+
+#filter to just black/hispanic
+race_percentages <- race_percentages %>% 
+ filter(race_rollup %in% c("Black (Not Hispanic)", "Hispanic")) %>% 
+  print()
+
+#preform the left-join of race_percentages and ap_courses_count by D_location_name
+race_percentages <- race_percentages %>% 
+  left_join(ap_courses_count, by = "D_location_name") %>% 
+  print()
+
+#create two new data-frames, one for black one for hispanic to make it easier 
+AP_by_Hispanic <- race_percentages %>% 
+ filter(race_rollup %in% c("Hispanic")) %>% 
+  print()
+
+AP_by_Black <- race_percentages %>% 
+ filter(race_rollup %in% c("Black (Not Hispanic)")) %>% 
+  print()
+
+#Okay, how many students by race/ethnicity per school?
+snapshot_2024 %>%
+  group_by(D_location_name, race_rollup) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print() %>% 
+  ungroup()
+
+#create new data-frame to pivot that wider so schools are columns and number of students by race/ethnicity are rows
+wide_race_by_school <- snapshot_2024 %>%
+  group_by(D_location_name, race_rollup) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  pivot_wider(names_from = D_location_name, values_from = distinct_student_count) %>%
+  print()
+
+#enrollment of just 11th or 12th graders by school
+snapshot_2024 %>%
+  filter(D_stu_grade %in% c("11", "12")) %>%   # Filter for 11th OR 12th grade
+  group_by(D_location_name) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+
+
+
+```
+
+####a. Advandced Course Success by School
+
+```{r}
+
+#to level set, how many advanced course enrollments in 2024
+snapshot_2024 %>%
+  filter(C_rigor == "Above Standard") %>%  # Filter for above standard rigor courses
+  count()
+
+#and how many of those were failed
+snapshot_2024 %>%
+  filter(C_rigor == "Above Standard" & D_pass_fail == "Fail") %>%  # Filter for above standard rigor courses
+  count()
+
+#need to come back and fix this I see whats going on
+
+#looking at just above standard rigor courses, how many failed enrollments per school?
+snapshot_2024 %>%
+  filter(C_rigor == "Above Standard") %>%  # Filter for above standard rigor courses
+  group_by(D_location_name) %>%
+  summarise(
+    total_enrollments = n(),  # Count total enrollments (rows)
+    failed_enrollments = sum(D_pass_fail == "Fail")  # Count failed enrollments
+  ) %>%
+  ungroup()
+
+#looking at by course type, how many total enrollments by each advadnced course flag?
+snapshot_2024 %>%
+  filter(C_rigor == "Above Standard") %>%  # Filter for above standard rigor courses
+  group_by(C_AP_flag, C_IB_flag, C_dual_credit_flag) %>%
+  summarise(
+    total_enrollments = n(),  # Count total enrollments (rows)
+    failed_enrollments = sum(D_pass_fail == "Fail")  # Count failed enrollments
+  ) %>%
+  ungroup()
+
+
+
+
+```
+
+####b. Enrollments by school and course type
+
+```{r}
+#number of overall above standard enrollments by school
+snapshot_2024 %>%
+  filter(C_rigor == "Above Standard") %>%  # Filter for above standard rigor courses
+  group_by(D_location_name) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#Number of AP enrollments by school
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for AP courses
+  group_by(D_location_name) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#Number of IB enrollments by school
+snapshot_2024 %>%
+  filter(C_IB_flag == "Y") %>%  # Filter for IB courses
+  group_by(D_location_name) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#Number of Dual Credit Enrollments by school
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for dual credit courses
+  group_by(D_location_name) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#How many total AP courses offered by school
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for above standard rigor courses
+  mutate(cleaned_course_name = str_remove(D_course_name, "S[12]$")) %>%  # Remove 'S1' or 'S2' suffix from course codes
+  group_by(D_location_name) %>%
+  summarise(total_unique_courses = n_distinct(cleaned_course_name), .groups = 'drop') %>%
+  print()
+
+#How many IB courses offered by school
+snapshot_2024 %>%
+  filter(C_IB_flag == "Y") %>%  # Filter for above standard rigor courses
+  mutate(cleaned_course_name = str_remove(D_course_name, "S[12]$")) %>%  # Remove 'S1' or 'S2' suffix from course codes
+  group_by(D_location_name) %>%
+  summarise(total_unique_courses = n_distinct(cleaned_course_name), .groups = 'drop') %>%
+  print()
+
+#How many Dual Credit courses offered by school
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for above standard rigor courses
+  mutate(cleaned_course_name = str_remove(D_course_name, "S[12]$")) %>%  # Remove 'S1' or 'S2' suffix from course codes
+  group_by(D_location_name) %>%
+  summarise(total_unique_courses = n_distinct(cleaned_course_name), .groups = 'drop') %>%
+  print()
+
+#How many pathways offered by school
+snapshot_2024 %>%
+  filter(C_pathway_flag == "Y") %>%  # Filter for above standard rigor courses
+  mutate(cleaned_course_name = str_remove(D_course_name, "S[12]$")) %>%  # Remove 'S1' or 'S2' suffix from course codes
+  group_by(D_location_name) %>%
+  summarise(total_unique_courses = n_distinct(cleaned_course_name), .groups = 'drop') %>%
+  print()
+
+#How many total unique courses offered by school
+snapshot_2024 %>%
+  mutate(cleaned_course_name = str_remove(D_course_name, "S[12]$")) %>%  # Remove 'S1' or 'S2' suffix from course codes
+  group_by(D_location_name) %>%
+  summarise(total_unique_courses = n_distinct(cleaned_course_name), .groups = 'drop') %>%
+  print()
+
+#Total students per school
+snapshot_2024 %>%
+  group_by(D_location_name) %>%
+  summarise(total_students = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+
+
+```
+
+####c. Dual Credit Analysis
+
+```{r}
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%
+  # Group by student and sum the total dual credits earned across their enrollments
+  group_by(D_stu_id) %>%
+  summarise(total_credits = sum(D_credits_earned, na.rm = TRUE)) %>%
+  # Create mutually exclusive and collectively exhaustive buckets
+  mutate(dual_credit_bucket = case_when(
+    total_credits == 0 ~ "0 Credits",
+    total_credits == 0.5 ~ "0.5 Credits",
+    total_credits == 10 ~ "10 Credits",
+    total_credits > 10 & total_credits <= 20 ~ "10-20 Credits",
+    total_credits > 20 & total_credits <= 30 ~ "20-30 Credits",
+    total_credits > 30 & total_credits <= 40 ~ "30-40 Credits",
+    total_credits > 40 ~ "40+ Credits",
+    TRUE ~ as.character(total_credits)  # Show the actual value if no bucket matches
+  )) %>%
+  # Group by the credit bucket
+  group_by(dual_credit_bucket) %>%
+  # Count the distinct number of students in each bucket
+  summarise(number_of_students = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#Which dual credit courses are the most popular, or have the most enrollments
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for dual credit courses
+  mutate(cleaned_course_name = str_remove(D_course_name, "S[12]$")) %>% 
+  group_by(cleaned_course_name) %>%  # Group by course name
+  summarise(total_enrollments = n(), .groups = 'drop') %>%  # Count total enrollments
+  arrange(desc(total_enrollments)) %>%  # Arrange in descending order
+  print()
+
+#of all students who took a dual enrollment course, what is the breakdown by D_stu_race
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for dual credit courses
+  group_by(race_rollup) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print() %>% 
+  ungroup
+
+#Once enrolled, how does failure rate differ by race/ethnicity
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for dual credit courses
+  group_by(race_rollup, D_pass_fail) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print() %>% 
+  ungroup
+
+```
+
+####d. Quick IB Analysis
+
+```{r}
+#in the three IB schools (JFK, George Washington, and Northfield) how many students are taking IB versus not taking IB?
+
+#JFK
+snapshot_2024 %>%
+  filter(D_stu_grade == "11" | D_stu_grade == "12") %>%   # Filter for 11th OR 12th grade
+  filter(D_location_name == "John F. Kennedy High School") %>%
+  group_by(C_IB_flag) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+
+#George Washington
+snapshot_2024 %>%
+   filter(D_stu_grade == "11" | D_stu_grade == "12") %>%   # Filter for 11th OR 12th grade
+  filter(D_location_name == "George Washington High School") %>%
+  group_by(C_IB_flag) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#Northfield
+snapshot_2024 %>%
+   filter(D_stu_grade == "11" | D_stu_grade == "12") %>%   # Filter for 11th OR 12th grade
+  filter(D_location_name == "Northfield High School") %>%
+  group_by(C_IB_flag) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#so because I think what we are seeing is that its just a lot of 9th and 10th graders, going back up to restrict to just looking at 11/12 enrollments to hopefully get a better picture
+
+
+#Now lets look at race/ethnicity demographics
+#JFK
+snapshot_2024 %>%
+  filter(D_stu_grade == "11" | D_stu_grade == "12") %>%   # Filter for 11th OR 12th grade
+  filter(D_location_name == "John F. Kennedy High School") %>%
+  group_by(C_IB_flag, race_rollup) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#Gw
+snapshot_2024 %>%
+  filter(D_stu_grade == "11" | D_stu_grade == "12") %>%   # Filter for 11th OR 12th grade
+  filter(D_location_name == "George Washington High School") %>%
+  group_by(C_IB_flag, race_rollup) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#northfield
+snapshot_2024 %>%
+  filter(D_stu_grade == "11" | D_stu_grade == "12") %>%   # Filter for 11th OR 12th grade
+  filter(D_location_name == "Northfield High School") %>%
+  group_by(C_IB_flag, race_rollup) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+```
+
+####e. AP Credit Accumulation
+
+```{r}
+#of students who took an AP course, how many credits are they earning?
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  # Group by student and sum the total dual credits earned across their enrollments
+  group_by(D_stu_id) %>%
+  summarise(total_credits = sum(D_credits_earned, na.rm = TRUE)) %>%
+  # Create mutually exclusive and collectively exhaustive buckets
+  mutate(AP_credit_bucket = case_when(
+    total_credits == 0 ~ "0 Credits",
+    total_credits == 0.5 ~ "0.5 Credits",
+    total_credits == 10 ~ "10 Credits",
+    total_credits > 10 & total_credits <= 20 ~ "10-20 Credits",
+    total_credits > 20 & total_credits <= 30 ~ "20-30 Credits",
+    total_credits > 30 & total_credits <= 40 ~ "30-40 Credits",
+    total_credits > 40 ~ "40+ Credits",
+    TRUE ~ as.character(total_credits)  # Show the actual value if no bucket matches
+  )) %>%
+  # Group by the credit bucket
+  group_by(AP_credit_bucket) %>%
+  # Count the distinct number of students in each bucket
+  summarise(number_of_students = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#and of AP course takers, whats the breakdown by grade level
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%
+  group_by(D_stu_grade) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print() %>% 
+  ungroup
+
+
+#AP Course Failure Rate by Race/Ethnicity
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for AP courses
+  group_by(race_rollup, D_pass_fail) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print() %>%
+  ungroup()
+
+#Whats the enrollment at Denver Montessori
+snapshot_2024 %>%
+  filter(D_location_name == "Denver Montessori Senior HS") %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#how many distinct students in the snapshot
+snapshot_2024 %>%
+  group_by(race_rollup) %>% 
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  print()
+
+#Do any students have multiple home locations and are getting counted twice?
+snapshot_2024 %>%
+  group_by(D_stu_id) %>%
+  summarise(distinct_home_locations = n_distinct(D_location_name), .groups = 'drop') %>%
+  filter(distinct_home_locations > 1) %>%
+  print()
+
+#hmmm got it got it. Think this is fine, because a students enrollment will be counted at their school level, which is fine
+```
+
+####f. Race/ethnicity by school by advanced course disparity
+
+```{r}
+library(dplyr)
+
+# Step 1: Filter for advanced courses
+advanced_courses <- snapshot_2024 %>%
+  filter(C_rigor == "Above Standard")
+
+# Step 2: Count the number of students in advanced courses by location and race
+advanced_students_by_race <- advanced_courses %>%
+  group_by(D_location_name, race_rollup) %>%
+  summarize(advanced_count = n_distinct(D_stu_id), .groups = 'drop')
+
+# Step 3: Count the total number of students by location and race
+total_students_by_race <- snapshot_2024 %>%
+  group_by(D_location_name, race_rollup) %>%
+  summarize(total_count = n_distinct(D_stu_id), .groups = 'drop')
+
+# Step 4: Merge the two data frames to calculate the percentage
+summary_df <- advanced_students_by_race %>%
+  left_join(total_students_by_race, by = c("D_location_name", "race_rollup")) %>%
+  mutate(percent_advanced = (advanced_count / total_count) * 100)
+
+# Step 5: Reshape the data to make race/ethnicity categories the rows and locations the columns
+summary_pivot <- summary_df %>%
+  select(D_location_name, race_rollup, percent_advanced) %>%
+  tidyr::pivot_wider(names_from = D_location_name, values_from = percent_advanced)
+
+# View the resulting data frame
+summary_pivot
+
+
+#Export
+# 
+#  upload_to_sharepoint <- function(df, file_name, file_type, destination_folder, drive) {
+#   # Set default local file path based on file type
+#   local_path <- paste0(file_name, ".xlsx")
+#   write.xlsx(df, local_path)
+#   destination_path <- file.path(destination_folder, basename(local_path))
+#    drive$upload_file(src = local_path, dest = destination_path)
+#   cat("File uploaded successfully to", destination_path, "\n")
+# }
+#  upload_to_sharepoint(df = summary_pivot,
+#                      file_name = "advanced_course_equity_disparity_by_school",
+#                       file_type = ".xlsx",
+#                      destination_folder = "District Partners/Denver/2024 Transcript Analysis/1. Data & Analysis - Secure/1.2 Data Validated in R",
+#                       drive = client_work_drive)
+
+
+
+#another quick check for RK
+#How many total IB enrollments?
+snapshot_2024 %>%
+  filter(C_IB_flag == "Y") %>%  # Filter for IB courses
+  count()
+
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for IB courses
+  count()
+
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for IB courses
+  count()
+
+
+```
+
+####g. Grades by race/ethnicity for advanced courses
+
+```{r}
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for AP courses
+  group_by(race_rollup) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#great, thats all I wanted. Then get the breakdown by D_course_mark
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for AP courses
+  group_by(race_rollup, D_course_mark) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#Great, one quick change, can we create a D_course_mark rollup that just rolls up A-, A+, etc. into A and so on
+
+snapshot_2024 <- snapshot_2024 %>%
+  mutate(course_mark_rollup = case_when(
+    str_detect(D_course_mark, "^A") ~ "A",
+    str_detect(D_course_mark, "^B") ~ "B",
+    str_detect(D_course_mark, "^C") ~ "C",
+    str_detect(D_course_mark, "^D") ~ "D",
+    str_detect(D_course_mark, "^F") ~ "F",
+    TRUE ~ D_course_mark  # Retain other course marks as is (e.g., 'AU', 'I', etc.)
+  ))
+
+#And then check again
+snapshot_2024 %>%
+  filter(C_AP_flag == "Y") %>%  # Filter for AP courses
+  group_by(race_rollup,course_mark_rollup) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#great, this I can manage. Same for Dual Credit
+
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for DC courses
+  group_by(race_rollup) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+#great, thats all I wanted. Then get the breakdown by D_course_mark
+snapshot_2024 %>%
+  filter(C_dual_credit_flag == "Y") %>%  # Filter for AP courses
+  group_by(race_rollup, course_mark_rollup) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') %>%
+  print()
+
+
+```
+
+###1.4 Transiency Analysis
+
+-   **Example:** Detroit Public Schools Community District
+
+-   **Analytic Question:** How many students enter/leave the school each year? Where do they come from? Where do they go?
+
+```{r}
+#how many neighborhood 9th graders in 2021?
+enrollment %>%
+  filter(YEAR_END == 2021 & year_end_grade_level == 9 & home_school_type == "Neighborhood") %>% 
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+#how many neighborhood 10th graders who were 9th graders in 2021?
+enrollment %>%
+  filter(`2022_sophomore` == "Y" & `2021_freshman` == "Y" & home_school_type == "Neighborhood") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+
+#how many 10th graders in 2022 who were NOT in the data in 2021, or were new students in 2022?
+enrollment <- enrollment %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  mutate(new_student_2022 = ifelse(
+    any(YEAR_END == 2022 & year_end_grade_level == 10 & home_school_type == "Neighborhood") & 
+    !any(YEAR_END < 2022), "Y", NA
+  )) %>%
+  ungroup()
+
+
+# Check how many new 10th grade students in 2022
+enrollment %>%
+  filter(home_school_type == "Neighborhood" & YEAR_END == 2022 & year_end_grade_level == 10 & new_student_2022 == "Y") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#how many students transferred to neighborhood schools from exam and application schools?
+enrollment <- enrollment %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  mutate(switched_from_exam_or_application = ifelse(
+    any(YEAR_END == 2022 & year_end_grade_level == 10 & home_school_by_year_type == "Neighborhood") & 
+    any(YEAR_END == 2021 & home_school_by_year_type %in% c("Exam", "Application")), 
+    "Y", 
+    NA
+  )) %>%
+  ungroup()
+
+# Count the number of 10th graders in 2022 at Neighborhood schools who came from Exam or Application schools
+enrollment %>%
+  filter(home_school_by_year_type == "Neighborhood", YEAR_END == 2022, year_end_grade_level == 10, switched_from_exam_or_application == "Y") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#How many were from exam and how many were from app
+enrollment %>%
+  filter(YEAR_END == 2021, 
+         `DPSCD Masked Student Id` %in% (
+           enrollment %>%
+             filter(home_school_by_year_type == "Neighborhood", 
+                    YEAR_END == 2022, 
+                    year_end_grade_level == 10, 
+                    switched_from_exam_or_application == "Y") %>%
+             pull(`DPSCD Masked Student Id`)
+         )) %>%
+  group_by(home_school_by_year_type) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#great. And then how many students in 2022 had data in 2021 as 9th graders, but then no data at all in 2022? aka left the district
+left_district <- enrollment %>%
+  filter(`2021_freshman` == "Y", home_school_type == "Neighborhood") %>%
+  filter(!`DPSCD Masked Student Id` %in% enrollment$`DPSCD Masked Student Id`[enrollment$YEAR_END == 2022 & enrollment$home_school_type == "Neighborhood"]) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#and how many total 10th graders in 2022
+enrollment %>%
+  filter(home_school_type == "Neighborhood" & year_end_grade_level == "10" & YEAR_END == 2022) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+# Count distinct students who were 10th graders in both 2021 and 2022
+enrollment %>%
+  filter(YEAR_END %in% c(2021, 2022) & year_end_grade_level == 10) %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  filter(n_distinct(YEAR_END) == 2) %>%  # Keep only students appearing in both years
+  ungroup() %>%  # Remove grouping to avoid issues
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+
+#hypothesis about whats going on is jumping grade levels
+# Find students who were 9th graders in 2021 and 11th graders in 2022
+enrollment %>%
+  filter((YEAR_END == 2021 & year_end_grade_level == 9) | 
+         (YEAR_END == 2022 & year_end_grade_level == 11)) %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  filter(n_distinct(YEAR_END) == 2) %>%  # Keep only students appearing in both years
+  ungroup() %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+
+#okay great. Now 2023
+
+#how many neighborhood 11th graders who were also in the cohort, or 10th graders in 2022 and 9th graders in 2021
+enrollment %>%
+  filter(`2023_junior` == "Y" & `2022_sophomore` == "Y" & `2021_freshman` == "Y" & home_school_type == "Neighborhood") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+#how many new students 2023
+
+enrollment <- enrollment %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  mutate(new_student_2023 = ifelse(
+    any(YEAR_END == 2023 & year_end_grade_level == 11 & home_school_type == "Neighborhood") & 
+    !any(YEAR_END < 2023), "Y", NA
+  )) %>%
+  ungroup()
+
+# Check how many new 11th grade students in 2023
+enrollment %>%
+  filter(home_school_type == "Neighborhood" & YEAR_END == 2023 & year_end_grade_level == 11 & new_student_2023 == "Y") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#okay, now I think we can check how many of the new students from 2022 stayed into 2023
+stayed_2023 <- enrollment %>%
+  filter(new_student_2022 == "Y") %>%
+  filter(YEAR_END == 2023 & home_school_type == "Neighborhood") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#okay and then how many students left the district from 2022 to 2023, or who's ID appeared in 2022 as a 10th grader but did not appear in 2023
+left_district <- enrollment %>%
+  filter(YEAR_END == 2022 & year_end_grade_level == 10 & home_school_type == "Neighborhood") %>%
+  filter(!`DPSCD Masked Student Id` %in% enrollment$`DPSCD Masked Student Id`[enrollment$YEAR_END == 2023 & enrollment$home_school_type == "Neighborhood"]) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+
+#how many total 11th graders at neighborhood schools in 2023
+enrollment %>%
+  filter(home_school_type == "Neighborhood" & year_end_grade_level == "11" & YEAR_END == 2023) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+# Identify students who transferred to Neighborhood schools from Exam or Application schools
+enrollment <- enrollment %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  mutate(switched_from_exam_or_application = ifelse(
+    any(YEAR_END == 2023 & year_end_grade_level == 11 & home_school_by_year_type == "Neighborhood") & 
+    any(YEAR_END == 2022 & home_school_by_year_type %in% c("Exam", "Application")), 
+    "Y", 
+    NA
+  )) %>%
+  ungroup()
+
+# Count the number of 11th graders in 2023 at Neighborhood schools who came from Exam or Application schools
+enrollment %>%
+  filter(home_school_by_year_type == "Neighborhood", YEAR_END == 2023, year_end_grade_level == 11, switched_from_exam_or_application == "Y") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+# Breakdown: How many came from Exam vs. Application schools in 2022?
+enrollment %>%
+  filter(YEAR_END == 2022, 
+         `DPSCD Masked Student Id` %in% (
+           enrollment %>%
+             filter(home_school_by_year_type == "Neighborhood", 
+                    YEAR_END == 2023, 
+                    year_end_grade_level == 11, 
+                    switched_from_exam_or_application == "Y") %>%
+             pull(`DPSCD Masked Student Id`)
+         )) %>%
+  group_by(home_school_by_year_type) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#okay and finally 2024
+
+#how many neighborhood 12th graders who were also in the cohort
+enrollment %>%
+  filter(`2024_senior` == "Y", `2023_junior` == "Y" & `2022_sophomore` == "Y" & `2021_freshman` == "Y" & home_school_type == "Neighborhood") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+#how many new students 2024
+enrollment <- enrollment %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  mutate(new_student_2024 = ifelse(
+    any(YEAR_END == 2024 & year_end_grade_level == 12 & home_school_type == "Neighborhood") & 
+    !any(YEAR_END < 2024), "Y", NA
+  )) %>%
+  ungroup()
+
+# Check how many new 12th grade students in 2024
+enrollment %>%
+  filter(home_school_type == "Neighborhood" & YEAR_END == 2024 & year_end_grade_level == 12 & new_student_2024 == "Y") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#okay, now I think we can check how many of the new students from 2023 stayed into 2024
+stayed_2023 <- enrollment %>%
+  filter(new_student_2023 == "Y") %>%
+  filter(YEAR_END == 2024 & home_school_type == "Neighborhood") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#and how many of the new students from 2023 stayed by 2024
+stayed_2023 <- enrollment %>%
+  filter(new_student_2022 == "Y") %>%
+  filter(YEAR_END == 2024 & home_school_type == "Neighborhood") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+
+#okay and then how many students left the district from 2023 to 2024, or who's ID appeared in 2023 as a 11th grader but did not appear in 2024
+left_district <- enrollment %>%
+  filter(`2023_junior` == "Y", home_school_type == "Neighborhood") %>%
+  filter(!`DPSCD Masked Student Id` %in% enrollment$`DPSCD Masked Student Id`[enrollment$YEAR_END == 2024 & enrollment$home_school_type == "Neighborhood"]) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+#how many total 12th graders in 2024
+enrollment %>%
+  filter(home_school_type == "Neighborhood" & year_end_grade_level == "12" & YEAR_END == 2024) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>% 
+  print()
+
+# Identify students who transferred to Neighborhood schools from Exam or Application schools
+enrollment <- enrollment %>%
+  group_by(`DPSCD Masked Student Id`) %>%
+  mutate(switched_from_exam_or_application = ifelse(
+    any(YEAR_END == 2024 & year_end_grade_level == 12 & home_school_by_year_type == "Neighborhood") & 
+    any(YEAR_END == 2023 & home_school_by_year_type %in% c("Exam", "Application")), 
+    "Y", 
+    NA
+  )) %>%
+  ungroup()
+
+# Count the number of 12th graders in 2024 at Neighborhood schools who came from Exam or Application schools
+enrollment %>%
+  filter(home_school_by_year_type == "Neighborhood", YEAR_END == 2024, year_end_grade_level == 12, switched_from_exam_or_application == "Y") %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+# Breakdown: How many came from Exam vs. Application schools in 2023?
+enrollment %>%
+  filter(YEAR_END == 2023, 
+         `DPSCD Masked Student Id` %in% (
+           enrollment %>%
+             filter(home_school_by_year_type == "Neighborhood", 
+                    YEAR_END == 2024, 
+                    year_end_grade_level == 12, 
+                    switched_from_exam_or_application == "Y") %>%
+             pull(`DPSCD Masked Student Id`)
+         )) %>%
+  group_by(home_school_by_year_type) %>%
+  summarise(n_students = n_distinct(`DPSCD Masked Student Id`)) %>%
+  print()
+
+
+```

@@ -1,0 +1,3630 @@
+---
+title: "04_snapshot_analysis-MANORISD"
+author: "Simon Ellis"
+date: "06/07/24"
+output:
+  word_document: default
+  html_document: default
+---
+
+# Part I: Setup
+
+This part of the script allows you to:
+
+-   Load the functions that R will be using to work with your data (Excel automatically loads all its functions - if, countif, index, match, etc. - when you open it, but R requires manual loading of functions if you want full access to what it offers)
+
+-   Specify the Sharepoint folder where your raw data lives so R can pull it in
+
+-   Actually load in the raw data you'll be working with throughout the rest of the script
+
+## 1.1 Load Packages
+
+-   **What:** This code block loads in all relevant function packages (a.k.a. R functions you'll be needing in this script). Note that if you haven't installed the packages into your computer yet, R will print an error and you'll need to install them first by running install.packages(tidyverse) and install.packages(formattable), etc.
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r, warning = F, message = F}
+library(tidyverse)
+library(data.table)
+library(dplyr)
+library(formattable)
+library(data.table)
+library(here)
+library(flextable)
+library(openxlsx)
+library(readxl)
+library(lubridate)
+library(safejoin)
+library(ggplot2)
+```
+
+## 1.2 Declare Variables
+
+-   **What:** This code block establishes a variable for code-users to define a consistent file path for loading data
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+### a. User Name
+
+```{r, warning = F, message = F}
+#action: add your user name in the file path. Add more user names for more team members
+user_name_team_member1 <- "C:/Users/sellis"
+user_name_team_member2 <- "XXX"
+user_name_team_member3 <- "XXX"
+```
+
+### b. File Path
+
+-   **What:** This code block creates a condensed file-path to the locally synced versions of your demographic data from sharepoint. You will have to edit to make it user/project specific.
+
+-   **Check:** No error message coming out of code block
+
+-   **Note:** File paths in R always use "/" instead of "", so you might need to manually change the direction of your slashes when you copy your folder path from Share point
+
+-   **Project Team Action:** Change the code below based on where your file is located. More specifically - find your path to the data by navigating to your folder in file explorer and then copying the path at the top of your file explorer. This path might be different for each team member depending on which folders they have synced to their One Drive
+
+```{r, warning = F, message = F}
+folder_path_team_member1 <- "/Education Resource Strategies/Org-wide Files - TX Network - HS Diagnostic for CCMR Pathways - 2024/Manor ISD 2024/1. Data & Analysis - Secure/1.2 Data Validated in R"
+folder_path_team_member2 <- "XXX"
+folder_path_team_member3 <- "XXX"
+```
+
+### c. Full Folder Path
+
+-   **What:** This code block combines the variables you created in the two previous steps to create one continuous file path to your data.
+
+-   **Check:** No error message coming out of code block, file path should match folder destination locally
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r, warning = F, message = F}
+#action: update the numbers at the end of the variables with your user number. E.g. if you are number 2, then change the number to 2 at the end of user_name_team_member and folder_path_team_member
+user_name <- user_name_team_member1
+folder_path <- folder_path_team_member1
+
+
+#action: leave unchanged (this combines your values above into a single file path)
+
+full_file_path <- paste0(user_name, folder_path)
+
+#check
+print(full_file_path)
+```
+
+### d. File Names
+
+-   **What:** This code block creates condensed versions of files names for ease of upload and analysis. You should update the code based on the specific names of your demographic files
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Update with specific file names
+
+-   **RT Methodological Note:** Lubbock sent three sets of student files, so need to upload all. This will not be the case for most districts
+
+```{r, warning = F, message = F}
+#update to your file name
+#note that your data should be in CSV format and that your file name should always end with .csv
+
+#pathways
+pathways <- "/00_pathways_cluster_companion.xlsx"
+
+#cluster_map
+cluster_map <- "/00_pathways_cluster_companion.xlsx"
+  
+#Snapshot_transcript_rollup
+merged_transcript_snapshot <- "/3_merged_transcript_snapshot_06.06.24.xlsx"
+  
+  
+```
+
+## 1.3 Load Data
+
+**What:** Now that R knows how to access the folder path, it's time to load in your raw data
+
+**Check:** The code block should print the names of all data files you need
+
+**Project Team Action:** None
+
+```{r}
+#pathways
+pathways <- read_xlsx(paste0(full_file_path, pathways), sheet = "Pathways", skip = 2)
+
+#cluster_map
+cluster_map <- read_xlsx(paste0(full_file_path, cluster_map), sheet = "Cluster Map")
+
+#Snapshot_transcript_rollup
+merged_transcript_snapshot <- read_xlsx(paste0(full_file_path, merged_transcript_snapshot))
+
+#Check them and make sure they look good
+```
+
+#1.4- Pre-Analysis File Cleaning and Merging
+
+**What:** Previously, joining in the pathways tables and cluster coding had been done in excel and added to the course catalog roll-up, but I am implementing R code to do it here instead.
+
+**Check:** 
+
+**Project Team Action:** 
+
+```{r}
+#So first we want to add the pathways information onto the snapshot_transcropt data frame using a left join by course Id to bring in the pathway fields
+
+#First I need to rename the pathways data frame to match the naming of the transcript for course Id, and remove the columns I don't want
+pathways <- pathways %>%
+  rename(D_course_id = `Course ID:`)
+
+print(pathways)
+
+#and I am going to remove the names of the columns that I do not need
+pathways <- pathways %>%
+  select(-`Course Name (PDF)`, -`Course Name Match (Course Catalog)`, -`Is Pathway?`)
+
+#add a multiple pathways flag that flags each course that has a "Y" value for more than one pathway column(this will help later)
+# Create a new column to count the number of "Y" values in pathway columns
+pathways <- pathways %>%
+  mutate(
+    pathway_count = rowSums(across(c(`Automotive`,`Animal Science`,`Applied Agriculture Engineering`,`Plant Science`,`Carpentry`,`Digital Communications`,`Design and Multi-Media Arts`,`Accounting and Financial Services`,`Early Learning`,`Healthcare Therapeutic`,`Culinary Arts`,`Web Development`,`Law Enforcement`,`Cosmetology`,`Advadnced Manufacturing and Machinery (Robotics)`,`Biomedical Science`,`Engineering`,`Cybersecurity`,	`Marketing & Sales`)) == "Y"),
+    Multiple_pathways = case_when(
+      pathway_count > 1 ~ "Y",
+      TRUE ~ "N"
+    )
+  )
+
+# Drop the temporary pathway_count column
+pathways <- pathways %>%
+  select(-pathway_count)
+
+# Print the updated data frame
+print(pathways)
+
+#then I need to filter to JUST pathways courses in the transcript data-frame before I merge on the pathways data- want to keep all courses for now 06/07/24
+#merged_transcript_snapshot <- merged_transcript_snapshot %>%
+  #filter(D_pathways_flag == "Y")
+
+#and before we join in lets add some checks that all the courses are present in the pathways
+#unique ids in the transcript rollup
+unique(merged_transcript_snapshot$D_course_id) -> unique_transcript_ids
+
+#unique ids in the pathways
+unique(pathways$D_course_id) -> unique_pathways_ids
+
+#create a new data frame of all of the course Ids that are NOT in the pathways data frame
+setdiff(unique_transcript_ids, unique_pathways_ids) -> missing_pathways_ids
+print(missing_pathways_ids)
+
+
+```
+
+#a. preform the join
+```{r}
+#And then join it in!
+left_join(merged_transcript_snapshot, pathways, by = "D_course_id") -> merged_transcript_snapshot_pathways
+
+#don't worry it will be a many to many join
+#the number of rows should NOT change
+nrow(merged_transcript_snapshot)
+
+#view the new data-frame to see that the merge worked correctly
+print(merged_transcript_snapshot_pathways)
+
+
+#something I am also noticing is that there are students who show identical course enrollment between two high schools, which show as unique rows. I think we should get rid of that and just use home school as the descriptor to get around that?
+
+print(merged_transcript_snapshot_pathways)
+
+```
+
+
+# Part II: Pathway and Advandced Course Analysis
+
+## 2.1 Create new data frame
+
+### a. Pathways - 2023
+
+```{r}
+#time to make the table! SE need to go back in and re-name this
+snapshot_pathways_table_2023 <- merged_transcript_snapshot_pathways %>% 
+  select(D_stu_id, 
+         D_course_id, 
+         D_course_name.x,
+         D_creds_earn,
+         D_final_grade,
+         C_grade_pct_rollup,
+         D_pass_fail,
+         D_stu_swd,
+         D_course_rigor,
+         D_dual_credit_flag,
+         D_AP_flag,
+         D_course_subj,
+         D_pathways_flag,
+         D_stu_race,
+         D_stu_frl,
+         C_home_school_code, 
+         C_home_school_name, 
+         C_eoy_grade,
+         `Course Level`,
+         Multiple_pathways,
+         `Automotive`,
+         `Animal Science`,
+         `Applied Agriculture Engineering`,
+         `Plant Science`,
+         `Carpentry`,
+         `Digital Communications`,
+         `Design and Multi-Media Arts`,
+         `Accounting and Financial Services`,
+         `Early Learning`,
+         `Healthcare Therapeutic`,
+         `Culinary Arts`,
+         `Web Development`,
+         `Law Enforcement`,
+         `Cosmetology`,
+         `Advadnced Manufacturing and Machinery (Robotics)`,
+         `Biomedical Science`,
+         `Engineering`,
+         `Cybersecurity`,
+         `Marketing & Sales`
+         )
+
+#06/07 BEFORE pivoting longer and creating the data-frame that is more suited for pathways analysis, I want to create a distinct data frame that has the same information above, but actually only one row per pathways course to avoid some of the problems I am experiencing later on
+
+base_analysis <- snapshot_pathways_table_2023
+
+#So now this "base_analysis" table is what I will use to run the checks on things that are NOT pathways courses
+
+#pivot longer
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  pivot_longer(cols = c(  
+         `Automotive`,
+         `Animal Science`,
+         `Applied Agriculture Engineering`,
+         `Plant Science`,
+         `Carpentry`,
+         `Digital Communications`,
+         `Design and Multi-Media Arts`,
+         `Accounting and Financial Services`,
+         `Early Learning`,
+         `Healthcare Therapeutic`,
+         `Culinary Arts`,
+         `Web Development`,
+         `Law Enforcement`,
+         `Cosmetology`,
+         `Advadnced Manufacturing and Machinery (Robotics)`,
+         `Biomedical Science`,
+         `Engineering`,
+         `Cybersecurity`,
+         `Marketing & Sales`), 
+               names_to = "C_pathway", 
+               values_to = "C_pathway_Y_or_N") #Y flag represents courses that are pathway courses - so essentially a student seat in a pathway
+
+#check that the distinct count of students has not changed-> this makes sense because now we are JUST looking at pathway takers
+snapshot_pathways_table_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+
+#convert Y to 1 and N to 0 because they are easier to deal with
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  mutate(C_pathway_Y_or_N = ifelse(C_pathway_Y_or_N == "Y", "1", "0"))
+
+
+#change data type
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  mutate(C_pathway_Y_or_N = as.numeric(C_pathway_Y_or_N))
+
+#remove all Ns because it will make file easier to deal with and you already have total counts of students so you don't need the Ns
+#06/07 Do not exclude for demo information
+#snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>% 
+  #filter(C_pathway_Y_or_N == "1")
+
+#Do a quick check to make sure we have no totally duplicate rows
+num_duplicates <- snapshot_pathways_table_2023 %>%
+  duplicated() %>%
+  sum()
+cat("Number of duplicate rows:", num_duplicates, "\n")
+
+#filter to just the duplicate rows to see whats going on
+duplicates_to_check <-snapshot_pathways_table_2023 %>%
+  filter(duplicated(.))
+print(duplicates_to_check)
+
+#okay lets remove the duplicated rows from the snapshot_pathways_table_2023 so that its only unique values
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  distinct()
+
+#check that the distinct count of students has not changed
+snapshot_pathways_table_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#great
+```
+
+#b. merge in cluster coding as last step before analysis!
+
+```{r}
+#left join to create a new column which is C_cluster
+left_join(snapshot_pathways_table_2023, cluster_map, by = c("C_pathway" = "Pathway")) -> snapshot_pathways_table_2023
+
+#the number of rows should not change
+#If you get NAs make sure to check spelling in the cluster sheet matches the pathways sheet
+#filter to NAs for cluster
+unique_pathways <- snapshot_pathways_table_2023 %>%
+  filter(is.na(Cluster)) %>%
+  select(C_pathway) %>%
+  distinct() %>% 
+  print()
+```
+
+#c. pre-Analysis Clean Up (Just renaming a couple of things to be easier in the editing process)
+```{r}
+#rename the cluster column
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  rename(C_cluster = Cluster)
+
+#rename the course level column
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  rename(C_pathway_course_level = `Course Level`)
+
+```
+
+#d. creating additional variables 
+ 
+```{r}
+# Adding in new race variable to match what I added into the pathways table
+#merged_snapshot <- merged_snapshot %>%
+  #mutate(C_stu_race_rollup = case_when(
+    #D_stu_race == "Black or African-American" ~ "Black",
+    #D_stu_race == "Hispanic" ~ "Hispanic",
+    #D_stu_race == "White" ~ "White",
+    #TRUE ~ "Other"
+  #))
+
+# Create a new variable called C_stu_grade_buckets
+# This should also ideally come earlier
+#merged_snapshot <- merged_snapshot %>%
+  #mutate(C_stu_grade_buckets = case_when(
+    #D_stu_grade == "A+" | 
+      #D_stu_grade == "A" | 
+#       D_stu_grade == "A-" |
+#       D_stu_grade == "A+1"| # This is some kind of error, but grouping here to fix it
+#       D_stu_grade == "B+"| 
+#       D_stu_grade == "B"|
+#       D_stu_grade == "B-"~ "A-B", # Create A-B bucket
+#     D_stu_grade == "C+" | 
+#       D_stu_grade == "C" | 
+#       D_stu_grade == "C-" | 
+#       D_stu_grade == "D+"| 
+#       D_stu_grade == "D"| 
+#       D_stu_grade == "D-" ~ "C-D", # Create C-D bucket
+#     D_stu_grade == "F" ~ "F", # Create F bucket
+#     D_stu_grade == "R" |
+#       D_stu_grade == "r"|
+#       D_stu_grade == "FR" ~ "R", # Create R bucket
+#     TRUE ~ "Other"
+#   ))
+# 
+# # Make a table of values of D_creds_possible
+# merged_snapshot %>%
+#   group_by(D_creds_possible) %>%
+#   summarise(count = n(), .groups = 'drop')
+# 
+
+
+#quick change to run LB Scripts
+#merged_snapshot <- snapshot_pathways_table_2023
+#clean up the old table a bit to help with space
+#rm(snapshot_pathways_table_2023)
+
+#### Pathways variables
+
+# Convert credits possible to be numeric
+base_analysis <- base_analysis %>%
+  mutate(D_creds_earn = as.numeric(D_creds_earn))
+
+#Make sure to edit these sorts of things for NA 
+# Create a new variable called C_any_pathway
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_pathway = ifelse(any(D_pathways_flag == "Y"), "Y", "N")) %>%
+  mutate(C_any_pathway =ifelse(is.na(C_any_pathway), "N", as.character(C_any_pathway))) %>% 
+  ungroup()
+
+#Check: quickly summarise rows to see if it worked
+base_analysis %>%
+  group_by(C_any_pathway) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+
+# Create a new variable called M_total_pathways_creds_possible that sums all of the pathways credits possible for each student
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(M_total_pathways_creds_possible = sum(ifelse(D_pathways_flag == "Y", as.numeric(D_creds_earn), 0), na.rm = TRUE)) %>%
+  ungroup()
+
+#as a check, return the number of distinct students by credits possible -> come back to check on this, seems very high
+base_analysis %>%
+  group_by(M_total_pathways_creds_possible) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+#### Advanced coursework variables
+
+# Create a new variable that identifies if a student took any above standard coursework
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_advanced = ifelse(any(D_course_rigor == "Above Standard"), "Y", "N")) %>%
+  ungroup()
+
+#Check that the flag worked
+base_analysis %>%
+  group_by(C_any_advanced) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+# Create a new variable that sums all of the above standard credits possible for each student -> found an issue with this where it will sum every row because of the pathways transformation. -> I think I essentially just need to go back and create a new data frame that doesn't have the pivoted longer pathways stuff to do these transformations on. Hold here.
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(M_total_advanced_creds_possible = sum(ifelse(D_course_rigor == "Above Standard", as.numeric(D_creds_earn), 0), na.rm = TRUE)) %>%
+  ungroup()
+
+#and check it
+base_analysis %>%
+  group_by(M_total_advanced_creds_possible) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+#### AP coursework variables
+
+# Create a new variable that identifies if a student took any ap courses
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_ap = ifelse(any(D_AP_flag == "Y"), "Y", "N")) %>%
+  ungroup()
+
+#Check that the flag worked
+base_analysis %>%
+  group_by(C_any_ap) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+
+# Create a new variable called M_total_AP_creds_possible that sums all of the dc credits possible for each student
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(M_total_ap_creds_possible = sum(ifelse(D_AP_flag == "Y", as.numeric(D_creds_earn), 0), na.rm = TRUE)) %>%
+  ungroup()
+
+#and check it
+base_analysis %>%
+  group_by(M_total_ap_creds_possible) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+
+#### Dual credit coursework variables 
+
+# Create a new variable called C_any_dc that identifies if a student took any dual credit
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_dc = ifelse(any(D_dual_credit_flag == "Y"), "Y", "N")) %>%
+  ungroup()
+
+#Check that the flag worked
+base_analysis %>%
+  group_by(C_any_dc) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+# Create a new variable called M_total_AP_creds_possible that sums all of the advanced credits possible for each student
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(M_total_dc_creds_possible = sum(ifelse(D_dual_credit_flag == "Y", as.numeric(D_creds_earn), 0), na.rm = TRUE)) %>%
+  ungroup()
+
+#and check it
+base_analysis %>%
+  group_by(M_total_dc_creds_possible) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+
+
+### Create new variables around failures of important courses 
+
+# Create H_fail_alg_1
+alg_1_course_ids <- c("AL1PAP", "ALG1A", "ALG1B", "ALG1A", "ALG1AI", "ALG1B", "ALG1BI", "ALG1EA", "ALG1EB", 
+                      "ALG1FA", "ALG1FB", "ALG1HA", "ALG1HB", "ALG1IA", "ALG1IB", "ALG1LA", "ALG1LB", 
+                      "ALG1MA", "ALG1MB", "ALG1RA", "ALG1RB", "ALGALT", "ALGAMA", "ALGAMB", "ALGEMA", 
+                      "ALGEMB", "ALGIMA", "ALGIMB", "ALGMIA", "ALGMIB", "PAPLGA", "PAPLGB")
+  
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(H_fail_alg_1 = case_when(
+    any(D_course_id %in% alg_1_course_ids & D_pass_fail == "N") ~ "Y",
+    any(D_course_id %in% alg_1_course_ids & D_pass_fail == "Y") ~ "N",
+    TRUE ~ NA_character_
+  )) %>%
+  ungroup()
+
+#check it -> should add up to total students WATCH OUT for multiple pass/fail students, add checks as needed if distinct count does not match total
+base_analysis %>%
+  group_by(H_fail_alg_1) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+#and a quick check how many distinct 9th graders are in the base_analysis data-frame?
+base_analysis %>%
+  filter(C_eoy_grade == "9") %>%
+  group_by(D_stu_id) %>%
+  summarise(count = n()) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+
+# Create H_fail_ela_1
+ela_1_course_ids <- c("ENALA", "ENALB", "ENG1A", "ENG1B", "ENG1EA", "ENG1EB", "ENG1FA", "ENG1FB", "ENG1HA", 
+                "ENG1HB", "ENG1IA", "ENG1IB", "ENG1LA", "ENG1LB", "ENG1RA", "ENG1RB", "ENG1WA", 
+                "ENG1WB", "ESL1A", "ESOL1A", "ESOL1B")
+  
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(H_fail_ela_1 = case_when(
+    any(D_course_id %in% ela_1_course_ids & D_pass_fail == "N") ~ "Y",
+    any(D_course_id %in% ela_1_course_ids & D_pass_fail == "Y") ~ "N",
+    TRUE ~ NA_character_
+  )) %>%
+  ungroup()
+
+#check it -> should add up to total students WATCH OUT for multiple pass/fail students, add checks as needed if distinct count does not match total
+base_analysis %>%
+  group_by(H_fail_ela_1) %>%
+  summarise(distinct_count = n_distinct(D_stu_id))
+
+#Lets filter to just 9th grade students, and then filter to just students who have an N/A for H_fail_ela_1
+ela_9_nas <- base_analysis %>%
+  filter(C_eoy_grade == "9") %>%
+  filter(is.na(H_fail_ela_1)) %>%
+  group_by(D_stu_id)
+
+```
+
+
+#2.2 High Level Context
+
+#a. count of included students
+```{r}
+# Count of distinct student IDs in merged snapshot
+base_analysis %>%
+  select(D_stu_id) %>%
+  distinct() %>%
+  count()
+```         
+#b. overall student demographic info
+```{r}
+# Count of students by D_stu_race
+# Count of distinct students by D_stu_race
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_race) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_stu_race = "Total", count_students = sum(.$count_students), percentage = 100)
+
+# Count of students by SWD
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_swd) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_stu_swd = "Total", count_students = sum(.$count_students), percentage = 100)
+
+
+# Count of students by FRL
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_frl) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_stu_frl = "Total", count_students = sum(.$count_students), percentage = 100)
+```
+#c. overall student grade level
+```{r}
+# Count of students by C_eoy_grade
+summary_table <- base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  mutate(C_eoy_grade = as.character(C_eoy_grade)) %>%
+  group_by(C_eoy_grade) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  bind_rows(tibble(C_eoy_grade = "Total", 
+                   count_students = sum(.$count_students), 
+                   percentage = 100)) %>%
+  arrange(C_eoy_grade)
+
+summary_table %>% flextable()
+```
+
+
+
+
+#d. student demographics by school
+```{r}
+#before I do these for display purposes, I think I want to roll-up Manor High, Manor Early College, and Manor Senior High to one reporting field that will just be called "Manor High Comprehensive". So first lets make a new column called "location_rollup" that will take values from C_home_school_name and then replace the values of Manor High, Manor Early College, and Manor Senior High with "Manor High Comprehensive"
+base_analysis <- base_analysis %>%
+  mutate(location_rollup = case_when(
+    C_home_school_name %in% c("MANOR HIGH SCHO", "MANOR EARLY COL", "MANOR SENIOR HI") ~ "Manor High Comprehensive",
+    TRUE ~ C_home_school_name
+  ))
+
+#and now using this location-rollup for reporting purposes
+
+
+# Create a table by race
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(location_rollup, D_stu_race) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(location_rollup = "Total", count_students = sum(.$count_students), percentage = 100)
+
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, D_stu_race) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = D_stu_race, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(location_rollup = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+
+#count of distinct students by location_rollup
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(location_rollup) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  add_row(location_rollup = "Total", count_students = sum(.$count_students))
+
+```
+
+#e. student performance by school 
+```{r}
+#before I do this I need to cleanup my C_grade_pct_rollup column because its not displaying exactly how I want it to
+base_analysis <- base_analysis %>%
+  mutate(C_grade_pct_rollup = case_when(
+    D_final_grade >= 90 ~ "90+",
+    D_final_grade >= 80 & D_final_grade < 90 ~ "80-89",
+    D_final_grade >= 70 & D_final_grade < 80 ~ "70-79",
+    D_final_grade >= 60 & D_final_grade < 70 ~ "60-69",
+    D_final_grade >= 50 & D_final_grade < 60 ~ "50-59",
+    D_final_grade < 50 ~ "Lower than 50",
+    is.na(D_final_grade) ~ "Not graded",
+    TRUE ~ as.character(D_final_grade) # This handles any other cases, just in case
+  ))
+
+#and as a quick check before I move on lets check the unique course Ids of courses that show up as "Not graded"
+unique(base_analysis$D_course_id[base_analysis$C_grade_pct_rollup == "Not graded"]) -> unique_not_graded_courses
+
+#and print them
+print(unique_not_graded_courses)
+
+#okay there are defintley courses there that I would expect to be graded, so maybe sometimes students just didn't receive a grade for the course
+
+# Create pivot table with row totals
+pivot_table <- base_analysis %>%
+  group_by(location_rollup, C_grade_pct_rollup) %>%
+  summarise(count_courses = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = count_courses, values_fill = 0) %>%
+  mutate(row_total = rowSums(across(-location_rollup)))
+
+# Print the pivot table
+pivot_table %>% flextable()
+
+# Function to create pivot table with percentages
+create_percentage_table <- function(data) {
+  # Create pivot table with counts
+  pivot_table <- data %>%
+    group_by(location_rollup, C_grade_pct_rollup) %>%
+    summarise(count_courses = n(), .groups = 'drop') %>%
+    pivot_wider(names_from = C_grade_pct_rollup, values_from = count_courses, values_fill = 0)
+
+  # Calculate percentages for each row and round to one decimal place
+  percentage_table <- pivot_table %>%
+    mutate(across(-location_rollup, ~ round((. / rowSums(across(-location_rollup))) * 100, 1)))
+
+  # Return the percentage table
+  percentage_table
+}
+
+# Create the percentage table
+percentage_table <- create_percentage_table(base_analysis)
+
+# Print the percentage table
+percentage_table %>% flextable()
+
+
+#After talking with Ryan, before we move on, we actually want to exclude any rows that have N/A Final grade values from the analysis, so at this point in our base analysis frame thats filter out any row that has a value of N/A in D_final_grade
+base_analysis <- base_analysis %>%
+  filter(!is.na(D_final_grade))
+
+#So now there should be no N/A Rows moving forward
+```
+
+#f. student performance in Alg 1 & ELA 1 
+```{r}
+#before checking this I want to make sure that no student is counted as both passing and failing the same course ID
+duplicate_pass_fail <- base_analysis %>%
+  group_by(D_stu_id, D_course_id) %>%
+  filter(any(D_pass_fail == "Y") & any(D_pass_fail == "N")) %>%
+  ungroup()
+
+# View the result
+print(duplicate_pass_fail)
+
+#how many distinct students with duplicates?
+duplicate_pass_fail %>%
+  summarise(count = n_distinct(D_stu_id))
+
+#Lets create a flag for these students to easily filter out their "yes" rows. First I want to tag every "Y" row for the "D_pass_fail" variable where a unique student also has an "N" for row for the same course. This new column should be called "credit_recovery_duplicate", and the "yes" flags should only be rows marked "Y" where a student also has a "N" row for the same course.
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id, D_course_id) %>%
+  mutate(credit_recovery_duplicate = ifelse(any(D_pass_fail == "Y") & any(D_pass_fail == "N") & D_pass_fail == "Y", "Y", "N")) %>%
+  ungroup()
+
+#and check that the flag worked by summing the number of rows marked "Y" for credit_recovery_duplicate
+base_analysis %>%
+  filter(credit_recovery_duplicate == "Y") %>%
+  summarise(count = n())
+
+#It should be the same number as "duplicates"Y" duplicate rows, which it is so we are good!
+#NOTE- the new column did not "display" in the viewer for me very easily because it was at the end of the data frame, so I had to scroll to the right to see it. R can only display 50 columns at a time
+
+#06/14 update after talking with Ryan we are actually just going to exclude these "Y" rows from the analysis, so we will filter them out now
+base_analysis <- base_analysis %>%
+  filter(credit_recovery_duplicate == "N")
+
+#and quickly double check from your duplicates frame that a couple of the student IDs with duplicate pass/fail rows were filtered out of the data-frame correctly
+
+## Algebra 1 overall 
+# Create a table of distinct counts of students who fail algebra 1
+base_analysis %>%
+  group_by(H_fail_alg_1) %>%
+  distinct(D_stu_id) %>%
+  summarise(count = n_distinct(D_stu_id), .groups = 'drop')
+
+# Create a table of distinct students H_fail_alg_1 with counts and percents
+result <- base_analysis %>%
+  # Filter out rows where H_fail_alg_1 is NA
+  filter(!is.na(H_fail_alg_1)) %>%
+  # Find distinct combinations of D_stu_id
+  distinct(D_stu_id, H_fail_alg_1) %>%
+  # Summarize data by H_fail_alg_1
+  group_by(H_fail_alg_1) %>%
+  summarise(
+    # Calculate the count of distinct D_stu_id
+    count = n_distinct(D_stu_id),
+    # Calculate the percentage of each group out of the total distinct students
+    percent = (n_distinct(D_stu_id) / n_distinct(.$D_stu_id)) * 100,
+    .groups = 'drop'
+  )
+
+result
+
+## Algebra 1 failures by school
+# Create a table of distinct students H_fail_alg_1 with counts and percents within each school
+result <- base_analysis %>%
+  # Filter out rows where H_fail_alg_1 is NA
+  filter(!is.na(H_fail_alg_1)) %>%
+  # Find distinct combinations of D_stu_id, H_home_school_name, and H_fail_alg_1
+  distinct(D_stu_id, location_rollup, H_fail_alg_1) %>%
+  # Group by H_home_school_name and H_fail_alg_1
+  group_by(location_rollup, H_fail_alg_1) %>%
+  summarise(
+    # Calculate the count of distinct D_stu_id within each school and H_fail_alg_1
+    count = n_distinct(D_stu_id),
+    .groups = 'drop_last'
+  ) %>%
+  # Calculate the total distinct students within each school
+  mutate(total_school = sum(count)) %>%
+  # Calculate the percentage of each group out of the total distinct students within the same school
+  mutate(percent = (count / total_school) * 100) %>%
+  # Drop the grouping structure
+  ungroup() %>%
+  # Drop the total_school column
+  select(-total_school)
+
+result
+
+## Algebra 1 failures by race
+# Create a table of distinct students H_fail_alg_1 with counts and percents within each school
+result <- base_analysis %>%
+  # Filter out rows where H_fail_alg_1 is NA
+  filter(!is.na(H_fail_alg_1)) %>%
+  # Find distinct combinations of D_stu_id, H_home_school_name, and H_fail_alg_1
+  distinct(D_stu_id, D_stu_race, H_fail_alg_1) %>%
+  # Group by H_home_school_name and H_fail_alg_1
+  group_by(D_stu_race, H_fail_alg_1) %>%
+  summarise(
+    # Calculate the count of distinct D_stu_id within each school and H_fail_alg_1
+    count = n_distinct(D_stu_id),
+    .groups = 'drop_last'
+  ) %>%
+  # Calculate the total distinct students within each school
+  mutate(total_race = sum(count)) %>%
+  # Calculate the percentage of each group out of the total distinct students within the same school
+  mutate(percent = (count / total_race) * 100) %>%
+  # Drop the grouping structure
+  ungroup() %>%
+  # Drop the total_school column
+  select(-total_race)
+
+result
+
+## ELA 1 overall
+# Create a table of distinct counts of students who fail ELA 1
+base_analysis %>%
+  group_by(H_fail_ela_1) %>%
+  distinct(D_stu_id) %>%
+  summarise(count = n_distinct(D_stu_id), .groups = 'drop')
+
+# Create a table of distinct students H_fail_ela_1 with counts and percents
+result <- base_analysis %>%
+  # Filter out rows where H_fail_alg_1 is NA
+  filter(!is.na(H_fail_ela_1)) %>%
+  # Find distinct combinations of D_stu_id
+  distinct(D_stu_id, H_fail_ela_1) %>%
+  # Summarize data by H_fail_alg_1
+  group_by(H_fail_ela_1) %>%
+  summarise(
+    # Calculate the count of distinct D_stu_id
+    count = n_distinct(D_stu_id),
+    # Calculate the percentage of each group out of the total distinct students
+    percent = (n_distinct(D_stu_id) / n_distinct(.$D_stu_id)) * 100,
+    .groups = 'drop'
+  )
+
+result
+
+## ELA 1 failures by school
+# Create a table of distinct students H_fail_alg_1 with counts and percents within each school
+result <- base_analysis %>%
+  # Filter out rows where H_fail_alg_1 is NA
+  filter(!is.na(H_fail_ela_1)) %>%
+  # Find distinct combinations of D_stu_id, H_home_school_name, and H_fail_alg_1
+  distinct(D_stu_id,location_rollup, H_fail_ela_1) %>%
+  # Group by H_home_school_name and H_fail_alg_1
+  group_by(location_rollup, H_fail_ela_1) %>%
+  summarise(
+    # Calculate the count of distinct D_stu_id within each school and H_fail_alg_1
+    count = n_distinct(D_stu_id),
+    .groups = 'drop_last'
+  ) %>%
+  # Calculate the total distinct students within each school
+  mutate(total_school = sum(count)) %>%
+  # Calculate the percentage of each group out of the total distinct students within the same school
+  mutate(percent = (count / total_school) * 100) %>%
+  # Drop the grouping structure
+  ungroup() %>%
+  # Drop the total_school column
+  select(-total_school)
+
+result
+
+
+## ELA 1 failures by race
+# Create a table of distinct students H_fail_alg_1 with counts and percents within each school
+result <- base_analysis %>%
+  # Filter out rows where H_fail_alg_1 is NA
+  filter(!is.na(H_fail_ela_1)) %>%
+  # Find distinct combinations of D_stu_id, H_home_school_name, and H_fail_alg_1
+  distinct(D_stu_id, D_stu_race, H_fail_ela_1) %>%
+  # Group by H_home_school_name and H_fail_alg_1
+  group_by(D_stu_race, H_fail_ela_1) %>%
+  summarise(
+    # Calculate the count of distinct D_stu_id within each school and H_fail_ela_1
+    count = n_distinct(D_stu_id),
+    .groups = 'drop_last'
+  ) %>%
+  # Calculate the total distinct students within each school
+  mutate(total_race = sum(count)) %>%
+  # Calculate the percentage of each group out of the total distinct students within the same school
+  mutate(percent = (count / total_race) * 100) %>%
+  # Drop the grouping structure
+  ungroup() %>%
+  # Drop the total_school column
+  select(-total_race)
+
+result
+```
+
+
+
+
+##2.3 Pathways Summary
+
+
+#a. pathways credits
+```{r}
+# Create a table to look at how many student were enrolled in ANY pathways 
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(C_any_pathway) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(C_any_pathway = "Total", count_students = sum(.$count_students), percentage = 100)
+
+# Make sure M_total_pathways_creds_possible is numeric
+base_analysis <- base_analysis %>%
+  mutate(M_total_pathways_creds_possible = as.character(M_total_pathways_creds_possible))
+
+# Create a summary table of pathways credits possible
+summary_table <- base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(M_total_pathways_creds_possible) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1))
+
+# Calculate the grand total
+grand_total <- base_analysis %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  mutate(M_total_pathways_creds_possible = "Total")
+
+# Combine the summary table with the grand total row
+summary_table <- bind_rows(summary_table, grand_total)
+
+# Print the summary table
+summary_table %>% flextable()
+```
+#b. pathways enrollment by school 
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, C_any_pathway) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_pathway, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(location_rollup = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+```
+#c. pathways credits possible by school 
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, M_total_pathways_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_pathways_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(location_rollup = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+
+
+```
+
+#d. pathways credits by grade level
+```{r}
+# Convert C_eoy_grade to a leveled factor initially
+base_analysis <- base_analysis %>%
+  mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, C_any_pathway) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_pathway, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, M_total_pathways_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_pathways_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables with pathways
+tables_with_pathways <- create_tables_with_pathways(base_analysis)
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+#e. pathways enrollment by race / ethnicity
+
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], C_any_pathway) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_pathway, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and C_any_pathway
+tables_any_pathway <- create_tables(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_any_pathway$final_count_data %>% flextable()
+tables_any_pathway$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], M_total_pathways_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_pathways_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and M_total_pathways_creds_possible
+tables_with_pathways <- create_tables_with_pathways(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+##2.4 Pathways Analysis 
+
+
+#a. enrollment by pathway (no cross-pathway courses)
+```{r}
+#first lets make the snapshot_pathways_table 2023 a little easier to navigate and read by filtering to only rows with a value of 1 in the column C_pathway_y_or_n
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway_Y_or_N == 1)
+
+#so now the data-frame should be filtered to one pathway course per student PER pathway (for multipless). For example, student 101098 shows 3 rows for one course because it could be in 3 pathways
+
+# Count of students by pathway 
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "N") %>%
+  group_by(C_pathway) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  arrange(C_pathway)
+
+# Add total row
+total_student_count <- pathways_student_count %>%
+  summarise(C_pathway = "Total", distinct_student_count = sum(distinct_student_count))
+
+final_student_count <- bind_rows(pathways_student_count, total_student_count)
+
+# Print the table
+final_student_count %>% flextable()
+
+# Count of course seats by pathway
+# Count of D_course_id by C_pathway with filter for C_multiple_cats == "N" and total row
+pathways_course_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "N") %>%
+  group_by(C_pathway) %>%
+  summarise(course_count = n(), .groups = 'drop') %>%
+  arrange(C_pathway)
+
+# Add total row
+total_course_count <- pathways_course_count %>%
+  summarise(C_pathway = "Total", course_count = sum(course_count))
+
+final_course_count <- bind_rows(pathways_course_count, total_course_count)
+
+# Print the table
+final_course_count %>% flextable()
+```
+
+#b. enrollment by pathway (cross-pathway courses)
+```{r}
+# Count of students by pathway 
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "Y") %>%
+  group_by(C_pathway) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  arrange(C_pathway)
+
+# Add total row
+total_student_count <- pathways_student_count %>%
+  summarise(C_pathway = "Total", distinct_student_count = sum(distinct_student_count))
+
+final_student_count <- bind_rows(pathways_student_count, total_student_count)
+
+# Print the table
+final_student_count %>% flextable()
+
+# Count of course seats by pathway
+# Count of D_course_id by C_pathway with filter for C_multiple_cats == "Y" and total row
+pathways_course_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "Y") %>%
+  group_by(C_pathway) %>%
+  summarise(course_count = n(), .groups = 'drop') %>%
+  arrange(C_pathway)
+
+# Add total row
+total_course_count <- pathways_course_count %>%
+  summarise(C_pathway = "Total", course_count = sum(course_count))
+
+final_course_count <- bind_rows(pathways_course_count, total_course_count)
+
+# Print the table
+final_course_count %>% flextable()
+
+```
+
+
+#c. enrollment by cluster
+```{r}
+#First I have to look at the number of courses that could be cross-cluster courses, so I want to look by course ID to see if any courses have more than one cluster tagged to them
+snapshot_pathways_table_2023 %>%
+  group_by(D_course_id) %>%
+  summarise(cluster_count = n_distinct(C_cluster), .groups = 'drop') %>%
+  filter(cluster_count > 1)
+
+#so its two courses, MDTEMA and PRNHUA. Medical Terminology and Principles of human services. Similar to the multiple pathways flag, lets create a multiple cluster flag to flag any rows for those two course IDs as "Y" for multiple clusters, all other rows get an N flag
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  mutate(Multiple_clusters = ifelse(D_course_id %in% c("MDTEMA", "PRNHUA"), "Y", "N"))
+
+#and make sure to apply that flag in filters
+
+
+#count of students by cluster- NOT multiple clusters
+# Count of students by pathway 
+cluster_student_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_clusters == "N") %>%
+  group_by(C_cluster) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  arrange(C_cluster)
+
+# Add total row
+total_student_count <- cluster_student_count %>%
+  summarise(C_cluster = "Total", distinct_student_count = sum(distinct_student_count))
+
+final_student_count <- bind_rows(cluster_student_count, total_student_count)
+
+# Print the table
+final_student_count %>% flextable()
+
+
+#course seats by cluster-NOT multiple clusters
+cluster_course_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_clusters == "N") %>%
+  group_by(C_cluster) %>%
+  summarise(course_count = n(), .groups = 'drop') %>%
+  arrange(C_cluster)
+
+# Add total row
+total_course_count <- cluster_course_count %>%
+  summarise(C_cluster = "Total", course_count = sum(course_count))
+
+final_course_count <- bind_rows(cluster_course_count, total_course_count)
+
+# Print the table
+final_course_count %>% flextable()
+
+#and then you can do the same for courses that span multiple clusters
+#count of students by cluster
+
+# Count of students by pathway - YES multiple clusters
+cluster_student_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_clusters == "N") %>%
+  group_by(C_cluster) %>%
+  summarise(distinct_student_count = n_distinct(D_stu_id), .groups = 'drop') %>%
+  arrange(C_cluster)
+
+# Add total row
+total_student_count <- cluster_student_count %>%
+  summarise(C_cluster = "Total", distinct_student_count = sum(distinct_student_count))
+
+final_student_count <- bind_rows(cluster_student_count, total_student_count)
+
+# Print the table
+final_student_count %>% flextable()
+
+
+#course seats by cluster  - YES multiple clusters
+cluster_course_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_clusters == "Y") %>%
+  group_by(C_cluster) %>%
+  summarise(course_count = n(), .groups = 'drop') %>%
+  arrange(C_cluster)
+
+# Add total row
+total_course_count <- cluster_course_count %>%
+  summarise(C_cluster = "Total", course_count = sum(course_count))
+
+final_course_count <- bind_rows(cluster_course_count, total_course_count)
+
+# Print the table
+final_course_count %>% flextable()
+
+
+```
+
+
+##2.5 Success by pathway 
+
+#a. sucess by pathway by enrollments
+```{r}
+#Two quick methodology framing notes here-
+#1, 06/14 before this I want to actually exclude any rows that have an N/A value for "D_final_grade" because it will mess up our success data, so lets filter those out first
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  filter(!is.na(D_final_grade))
+
+#2, 06/14 we actually don't need to filter out multiple catagories for this analysis because we want to count the failure as a potential failure in both pathways, just note that they will be double counted
+
+# went from 3048 rows to 2987, which is right. NOTE- this WILL change N-size of "pathway takers", which is okay!
+
+# Count of D_course_id by C_pathway and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  group_by(C_pathway, C_grade_pct_rollup) %>%  # Changed to C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_pathway = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+## Also look at success by courses that span pathways 
+# Count of D_course_id by C_pathway and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  group_by(C_pathway, C_grade_pct_rollup) %>%  # Changed to C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_pathway = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+
+#I am going to try to simply this and instead just get a count of the % of students that passed courses (by pathway) and then the % of students that failed
+
+# Count of D_course_id by C_pathway and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  group_by(C_pathway, D_pass_fail) %>%  # Changed to C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_pathway = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+## Also look at success by courses that span pathways 
+# Count of D_course_id by C_pathway and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  group_by(C_pathway, D_pass_fail) %>%  # Changed to C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_pathway = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+```
+
+#b. success by course level
+```{r}
+# Count of D_course_id by D_course_level and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(Multiple_pathways == "N") %>% # Note that we could leave in all here because we are not looking by pathway
+  group_by(C_pathway_course_level, D_pass_fail) %>%  # Changed to D_course_level and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from =D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_course_level = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+#quickly count the number of courses that do not have a grade associated with them- NOTE should be zero now that we fixed this from before
+snapshot_pathways_table_2023 %>%
+  filter(is.na(D_final_grade)) %>%
+  #count distinct course Ids where this is the case
+count(D_course_id)
+
+#And the number of courses that count for multiple pathways because I think its small-> but fine because they're counted on top and bottom so not necessary
+snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "Y") %>%
+  #count distinct course Ids where this is the case
+count(D_course_id)
+
+```
+
+#c. success by school 
+
+```{r}
+#First I am needing to go back in again and fix C_grade_pct_rollup because I only edited it for the "base-analysis" document, so I have to implement the fix here as well
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  mutate(C_grade_pct_rollup = case_when(
+    D_final_grade >= 90 ~ "90+",
+    D_final_grade >= 80 ~ "80-89",
+    D_final_grade >= 70 ~ "70-79",
+    D_final_grade >= 60 ~ "60-69",
+    D_final_grade >= 50 ~ "50-59",
+    D_final_grade < 50 ~ "Below 50",
+    TRUE ~ "Not a grade"
+  ))
+
+#and quickly summarize the number of rows that fall into each bucket now
+snapshot_pathways_table_2023 %>%
+  group_by(C_grade_pct_rollup) %>%
+  summarise(count = n())
+
+
+#same as above, checking for credit-recovery doubles
+#before checking this I want to make sure that no student is counted as both passing and failing the same course ID
+duplicate_pass_fail <- snapshot_pathways_table_2023 %>%
+  group_by(D_stu_id, D_course_id) %>%
+  filter(any(D_pass_fail == "Y") & any(D_pass_fail == "N")) %>%
+  ungroup()
+
+# View the result
+print(duplicate_pass_fail)
+
+#there are zero so we actually don't need to do this any further here!
+
+#how many distinct students with duplicates?
+#duplicate_pass_fail %>%
+  #summarise(count = n_distinct(D_stu_id))
+
+#Lets create a flag for these students to easily filter out their "yes" rows. First I want to tag every "Y" row for the "D_pass_fail" variable where a unique student also has an "N" for row for the same course. This new column should be called "credit_recovery_duplicate", and the "yes" flags should only be rows marked "Y" where a student also has a "N" row for the same course.
+#snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  #group_by(D_stu_id, D_course_id) %>%
+  #mutate(credit_recovery_duplicate = ifelse(any(D_pass_fail == "Y") & any(D_pass_fail == "N") & D_pass_fail == "Y", "Y", "N")) %>%
+  #ungroup()
+
+#and check that the flag worked by summing the number of rows marked "Y" for credit_recovery_duplicate
+#snapshot_pathways_table_2023 %>%
+  #filter(credit_recovery_duplicate == "Y") %>%
+  #summarise(count = n())
+
+#It should be the same number as "duplicates"Y" duplicate rows, which it is so we are good!
+
+
+#exclude these "Y" rows from the analysis, so we will filter them out now
+#snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  #filter(credit_recovery_duplicate == "N")
+
+snapshot_pathways_table_2023 <- snapshot_pathways_table_2023 %>%
+  mutate(location_rollup = case_when(
+    C_home_school_name %in% c("MANOR HIGH SCHO", "MANOR EARLY COL", "MANOR SENIOR HI") ~ "Manor High Comprehensive",
+    TRUE ~ C_home_school_name
+  ))
+
+#okay great, moving on
+
+#And before checking the success of pathway courses, need to do the Manor specific check due to credit-recovery coding that no student has both passed and failed the same course
+
+
+# Count of D_course_id by C_home_school_name and C_stu_grade_buckets
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(C_multiple_cats == "N") %>%  # Note that we could leave in all here because we are not looking by pathway
+  group_by(location_rollup, C_grade_pct_rollup) %>%  # Changed to C_home_school_name and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(location_rollup = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+
+#same thing but this time just pass/fail because I want to have that look too
+
+# Count of D_course_id by C_home_school_name and C_stu_grade_buckets
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(C_multiple_cats == "N") %>%  # Note that we could leave in all here because we are not looking by pathway
+  group_by(location_rollup, D_pass_fail) %>%  # Changed to C_home_school_name and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(location_rollup = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+```
+
+#d. success by demographic groups 
+```{r}
+# Count of D_course_id by C_stu_race_rollup and C_stu_grade_buckets
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(C_multiple_cats == "N") %>%  # Note that we could leave in all here because we are not looking by pathway
+  group_by(D_stu_race, C_grade_pct_rollup) %>%  # Changed to C_stu_race_rollup and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_race = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+#same thing but just by pass/fail
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(C_multiple_cats == "N") %>%  # Note that we could leave in all here because we are not looking by pathway
+  group_by(D_stu_race, D_pass_fail) %>%  # Changed to C_stu_race_rollup and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_race = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+
+```
+
+#e. Success broken out by pathway and race
+```{r}
+#-> SE Might come back to this later, but I dont know that I need this level of detail right now
+
+# Filter the data to include only relevant entries
+filtered_pathways_table <-snapshot_pathways_table_2023
+  #filter(C_multiple_cats == "N")  # Don't need to filter for % success looks
+
+# Create tables filtered by each value of C_stu_race_rollup
+filtered_tables <- filtered_pathways_table %>%
+  split(.$D_stu_race) %>%
+  lapply(function(df) {
+    # Count of D_course_id by C_pathway and C_stu_grade_buckets
+    counts_table <- df %>%
+      group_by(C_pathway, C_grade_pct_rollup) %>%
+      summarise(course_count = n(), .groups = 'drop') %>%
+      pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+    
+    # Add a row to sum the column totals
+    counts_table <- counts_table %>%
+      bind_rows(
+        counts_table %>%
+          summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+          mutate(C_pathway = "Total")
+      )
+    
+    # Add a column for the column total
+    counts_table <- counts_table %>%
+      mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+    
+    # Create a percentage table
+    percentage_table <- counts_table %>%
+      rowwise() %>%
+      mutate(across(2:(ncol(counts_table)-1), ~ round(. / sum(c_across(2:(ncol(counts_table)-1))) * 100, 1), .names = "{col}_percent")) %>%
+      ungroup()
+    
+    # Return the combined table
+    return(percentage_table)
+  })
+
+# Print each filtered table with clear identification in R Markdown
+for (name in names(filtered_tables)) {
+  cat("\n### Table for C_stu_race_rollup =", name, ":\n\n")
+  print(filtered_tables[[name]])
+}
+```
+
+##2.6 Advanced Coursework Enrollment
+
+
+#Ω. Dual-Credit Code Fix
+-   **What:** I discovered additional information related to dual credit courses, and instead of re-running the previous inputs, I am going to patch on the additional courses here
+
+-   **Check:** Included in the check, the number of dual credit students should increase
+
+-   **Project Action:** None
+
+```{r}
+#First I want to check the number of dual credit students before I add the additional courses
+num_distinct_students_with_dual_credit <- base_analysis %>%
+  filter(D_dual_credit_flag == "Y") %>%
+  distinct(D_stu_id) %>%
+  count()
+
+# Print the result
+print(num_distinct_students_with_dual_credit)
+
+
+#alright lets add in the new courses
+# Mutate D_dual_credit_flag for specified courses
+base_analysis <- base_analysis %>%
+  mutate(D_dual_credit_flag = ifelse(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD"), "Y", D_dual_credit_flag))
+
+#and check that the number of students increased
+num_distinct_students_with_dual_credit <- base_analysis %>%
+  filter(D_dual_credit_flag == "Y") %>%
+  distinct(D_stu_id) %>%
+  count()
+
+# Print the result
+print(num_distinct_students_with_dual_credit)
+
+#First add the courses to above standard rigor
+base_analysis <- base_analysis %>%
+  mutate(D_course_rigor = ifelse(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD"), "Above Standard", D_course_rigor))
+
+
+# Re-run the C_any_advanced flag to add students to any advanced
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_advanced = ifelse(any(D_course_rigor == "Above Standard"), "Y", "N")) %>%
+  ungroup()
+
+#and add to C_any_dc
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(C_any_dc = ifelse(any(D_dual_credit_flag == "Y"), "Y", "N")) %>%
+  ungroup()
+
+```
+
+#a. advanced coursework high-level enrollment 
+```{r}
+#-> back to base analysis data frame!
+#Looking at this code, it looks like I first need to mutate the base analysis data-frame to create a new column called "M_total_advanced_creds_possible" that groups by student ID and then sums the "D_creds_earned" column for all "Above Standard" courses under "D_course_rigor"
+# Create a new column to sum the total advanced credits possible
+base_analysis <- base_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(M_total_advanced_creds_possible = sum(D_creds_earn[D_course_rigor == "Above Standard"], na.rm = TRUE)) %>% 
+ungroup()
+
+
+# Create a table to look at how many student were enrolled in ANY advanced coursework
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_course_rigor) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_course_rigor = "Total", count_students = sum(.$count_students), percentage = 100)
+
+# Make sure M_total_pathways_creds_possible is numeric
+base_analysis <- base_analysis %>%
+  mutate(M_total_advanced_creds_possible = as.character(M_total_advanced_creds_possible))
+
+# Create a summary table of pathways credits possible
+summary_table <- base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(M_total_advanced_creds_possible) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1))
+
+# Sort the combined table by M_total_advanced_creds_possible
+summary_table <- summary_table %>%
+  arrange(as.numeric(M_total_advanced_creds_possible))
+
+# Calculate the grand total
+grand_total <- summary_table %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  mutate(M_total_advanced_creds_possible = "Total")
+
+# Combine the summary table with the grand total row
+summary_table <- bind_rows(summary_table, grand_total)
+
+# Print the summary table
+summary_table %>% flextable()
+
+#Not that many students, will have to keep that in mind... would expect far more than 27 out of 2822... I think that first table is not correctly working because the later table summarized more accuratley how I would expect to see advadnced enrollment 
+```
+
+#b.advanced coursework enrollment by school
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, C_any_advanced) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_advanced, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_home_school_name = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+```   
+
+#c. advanced coursework credits possible by school 
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, M_total_advanced_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_advanced_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_home_school_name = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+```
+
+#d. advanced credits by grade level
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, C_any_advanced) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_advanced, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, M_total_advanced_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_advanced_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables with pathways
+tables_with_pathways <- create_tables_with_pathways(base_analysis)
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+#e. advanced coursework enrollment by race / ethnicity 
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], C_any_advanced) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_advanced, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and C_any_pathway
+tables_any_pathway <- create_tables(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_any_pathway$final_count_data %>% flextable()
+tables_any_pathway$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], M_total_advanced_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_advanced_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and M_total_pathways_creds_possible
+tables_with_pathways <- create_tables_with_pathways(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+#f. advanced coursework enrollment by grade level
+```{r}
+#Count the number of students with any advanced course-work by grade level
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(C_eoy_grade, C_any_advanced) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(C_eoy_grade = "Total", count_students = sum(.$count_students), percentage = 100)
+
+
+
+
+
+
+
+```
+
+
+
+
+##2.7 AP Enrollment
+
+#a. AP high-level enrollment
+```{r}
+## Advanced coursework enrollment
+# Create a table to look at how many students were enrolled in ANY advanced coursework
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(C_any_ap) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(C_any_ap = "Total", count_students = sum(.$count_students), percentage = 100)
+
+# Make sure M_total_ap_creds_possible is numeric
+base_analysis <- base_analysis %>%
+  mutate(M_total_ap_creds_possible = as.character(M_total_ap_creds_possible))
+
+# Create a summary table of pathways credits possible
+summary_table <- base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(M_total_ap_creds_possible) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1))
+
+# Sort the combined table by M_total_ap_creds_possible
+summary_table <- summary_table %>%
+  arrange(as.numeric(M_total_ap_creds_possible))
+
+# Calculate the grand total
+grand_total <- summary_table %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  mutate(M_total_ap_creds_possible = "Total")
+
+# Combine the summary table with the grand total row
+summary_table <- bind_rows(summary_table, grand_total)
+
+# Print the summary table
+summary_table %>% flextable()
+```
+
+#b. AP enrollment by school
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, C_any_ap) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_ap, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_home_school_name = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+```
+
+#c. AP enrollment by grade level
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, C_any_ap) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_ap, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_ap_creds_possible
+create_tables_with_pathways <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, M_total_ap_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_ap_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables with pathways
+tables_with_pathways <- create_tables_with_pathways(base_analysis)
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+
+#d. AP Enrollment by race / ethnicity
+
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], C_any_ap) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_ap, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and C_any_pathway
+tables_any_pathway <- create_tables(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_any_pathway$final_count_data %>% flextable()
+tables_any_pathway$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], M_total_ap_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_ap_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and M_total_pathways_creds_possible
+tables_with_pathways <- create_tables_with_pathways(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+##2.8 Dual Credit Enrollment 
+
+#a. DC high-level enrollment 
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], C_any_dc) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_dc, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and C_any_pathway
+tables_any_pathway <- create_tables(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_any_pathway$final_count_data %>% flextable()
+tables_any_pathway$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], M_total_dc_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_dc_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and M_total_pathways_creds_possible
+tables_with_pathways <- create_tables_with_pathways(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+#b. DC enrollment by school
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(location_rollup, C_any_dc) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_dc, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(location_rollup = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+```
+
+#c. DC enrollment by grade level
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, C_any_dc) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_dc, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables
+tables <- create_tables(base_analysis)
+
+# Print the final tables
+tables$final_count_data %>% flextable()
+tables$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_dc_creds_possible
+create_tables_with_pathways <- function(data) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(C_eoy_grade, M_total_dc_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_dc_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Ensure C_eoy_grade maintains its factor levels
+  pivoted_data <- pivoted_data %>%
+    mutate(C_eoy_grade = factor(C_eoy_grade, levels = c("9", "10", "11", "12"), ordered = TRUE))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(C_eoy_grade = "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the tables with pathways
+tables_with_pathways <- create_tables_with_pathways(base_analysis)
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+#d. DC enrollment by race / ethnicity
+```{r}
+# Function to create the count and percentage tables
+create_tables <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], C_any_dc) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = C_any_dc, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and C_any_pathway
+tables_any_pathway <- create_tables(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_any_pathway$final_count_data %>% flextable()
+tables_any_pathway$final_percent_data %>% flextable()
+
+# Function to create the count and percentage tables with M_total_pathways_creds_possible
+create_tables_with_pathways <- function(data, group_var) {
+  # Calculate distinct count of D_stu_id
+  summary_data <- data %>%
+    distinct(D_stu_id, .keep_all = TRUE) %>%
+    group_by(.data[[group_var]], M_total_dc_creds_possible) %>%
+    summarise(count_students = n(), .groups = 'drop')
+
+  # Pivot the data to wide format
+  pivoted_data <- summary_data %>%
+    pivot_wider(names_from = M_total_dc_creds_possible, values_from = count_students, values_fill = list(count_students = 0))
+
+  # Add Grand Total row at the bottom for counts
+  grand_total <- pivoted_data %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    mutate(!!group_var := "Grand Total")
+
+  # Combine the pivoted data with the Grand Total row
+  final_count_data <- bind_rows(pivoted_data, grand_total)
+
+  # Calculate percentages for each row and round to one decimal place
+  percent_data <- pivoted_data %>%
+    rowwise() %>%
+    mutate(across(where(is.numeric), ~ round((. / sum(c_across(where(is.numeric)))) * 100, 1))) %>%
+    ungroup()
+
+  # Return the final count and percentage tables
+  list(final_count_data = final_count_data, final_percent_data = percent_data)
+}
+
+# Create the table with C_stu_race_rollup and M_total_pathways_creds_possible
+tables_with_pathways <- create_tables_with_pathways(base_analysis, "D_stu_race")
+
+# Print the final tables
+tables_with_pathways$final_count_data %>% flextable()
+tables_with_pathways$final_percent_data %>% flextable()
+```
+
+
+
+#2.9 Success by course rigor (Advanced coursework)
+```{r}
+#something about the percentage calculations here is not working, so double-check that and calculate on your own. Come back to this 06/24
+# Count of D_course_id by C_rigor and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>% 
+  group_by(location_rollup, C_grade_pct_rollup) %>%  # Changed to C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+student_count <- student_count %>%
+  bind_rows(
+    student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_rigor = "Total")
+  )
+
+# Add a column for the column total
+student_count <- student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+print(student_count)
+
+# Create a percentage table
+percentage_student_count <- student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+#same thing for race/ethnicity
+# Count of D_course_id by C_rigor and C_stu_grade_buckets with filter for C_multiple_cats == "N"
+student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>% 
+  group_by(D_stu_race, C_grade_pct_rollup) %>%  # Changed to C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+student_count <- student_count %>%
+  bind_rows(
+    student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_rigor = "Total")
+  )
+
+# Add a column for the column total
+student_count <- student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+print(student_count)
+
+# Create a percentage table
+percentage_student_count <- student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+```
+
+
+#a. success for FRL Students- pathways
+
+```{r}
+# Count of D_course_id by FRL status and C_stu_grade_buckets
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(C_multiple_cats == "N") %>%  # Note that we could leave in all here because we are not looking by pathway
+  group_by(D_stu_frl, C_grade_pct_rollup) %>%  # Changed to C_stu_race_rollup and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_race = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+#same thing but just by pass/fail
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  #filter(C_multiple_cats == "N") %>%  # Note that we could leave in all here because we are not looking by pathway
+  group_by(D_stu_frl, D_pass_fail) %>%  # Changed to C_stu_race_rollup and C_stu_grade_buckets
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_race = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+
+```
+
+#b. success for FRL Students- advadnced coursework
+```{r}
+# Count of D_course_id by D_stu_frl and C_stu_grade_buckets
+advanced_student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>%
+  group_by(D_stu_frl, D_pass_fail) %>%  
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+advanced_student_count <- advanced_student_count %>%
+  bind_rows(
+    advanced_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_frl = "Total")
+  )
+
+# Add a column for the column total
+advanced_student_count <- advanced_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+advanced_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- advanced_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+```
+
+#Part III: Deeper Dive Investigations
+
+#3.1 Re-Checking Figures
+```{r}
+#First I really quickly need to double check the race/ethnicity numbers because they weren't really adding up for me
+# Count of students by D_stu_race
+# Count of distinct students by D_stu_race
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_race) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_stu_race = "Total", count_students = sum(.$count_students), percentage = 100)
+
+# Count of students by SWD
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_swd) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_stu_swd = "Total", count_students = sum(.$count_students), percentage = 100)
+
+
+# Count of students by FRL
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_frl) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(D_stu_frl = "Total", count_students = sum(.$count_students), percentage = 100)
+
+#count of students by location rollup
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(location_rollup) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(location_rollup = "Total", count_students = sum(.$count_students), percentage = 100)
+
+#count of students by C_eoy_grade
+base_analysis %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(C_eoy_grade) %>%
+  summarise(count_students = n(), .groups = 'drop') %>%
+  mutate(percentage = round((count_students / sum(count_students)) * 100, 1)) %>%
+  add_row(C_eoy_grade = "Total", count_students = sum(.$count_students), percentage = 100)
+```
+
+#3.2. Pathways deep dives
+#a. Healthcare Theraputics
+```{r}
+#first lets take a look at healthcare theraputics, who is taking healthcare theraputics (demos), and where are they taking them?
+
+#summarize by location
+healthcare_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Healthcare Therapeutic") %>% 
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#summarize by courses
+healthcare_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Healthcare Therapeutic") %>% 
+group_by(D_course_id) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#summarize by race/ethnicity
+healthcare_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Healthcare Therapeutic") %>% 
+distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_race) %>%
+  summarize(number_of_students = n_distinct(D_stu_id)) %>%
+  arrange(desc(number_of_students)) %>%
+  print()
+
+#what else could I look at here, grade buckets?
+healthcare_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Healthcare Therapeutic") %>% 
+  group_by(C_grade_pct_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+```
+
+#b. Accounting and Finance
+```{r}
+#first lets take a look at healthcare theraputics, who is taking healthcare theraputics (demos), and where are they taking them?
+
+#summarize by location
+Accounting_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Accounting and Financial Services") %>% 
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#summarize by courses
+Accounting_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Accounting and Financial Services") %>% 
+group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#summarize by race/ethnicity
+Accounting_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Accounting and Financial Services") %>% 
+distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_race) %>%
+  summarize(number_of_students = n_distinct(D_stu_id)) %>%
+  arrange(desc(number_of_students)) %>%
+  print()
+
+#151/240= 62.9% of students in accounting and finance are Hispanic
+#72/240=30% of students in accounting and finance are Black
+#6/240=2.5% of students in accounting and finance are White
+#11/240=4.6% of students in accounting and finance are other
+
+
+```
+
+#c. Students who failed Engineering
+```{r}
+#first lets take a look at healthcare theraputics, who is taking healthcare theraputics (demos), and where are they taking them?
+
+#summarize by location
+Engineering_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Engineering") %>% 
+  filter(D_pass_fail == "N") %>%
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#summarize by courses
+Engineering_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Engineering") %>% 
+   filter(D_pass_fail == "N") %>%
+group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#summarize by race/ethnicity
+Engineering_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Engineering") %>% 
+   filter(D_pass_fail == "N") %>%
+distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(D_stu_race) %>%
+  summarize(number_of_students = n_distinct(D_stu_id)) %>%
+  arrange(desc(number_of_students)) %>%
+  print()
+
+```
+
+#d. AP Enrollments
+```{r}
+#summarize by courses
+AP_deep_dive <- base_analysis %>%
+  filter(D_AP_flag == "Y") %>% 
+group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+```
+
+
+#d. Advadnced Course-Taking by Type, Distinct Students
+```{r}
+#First lets create an "honors" flag that will be true if the course is honors by looking at the D_course_rigor and Dual Credit and AP flags to flag any course that might be honors
+base_analysis <- base_analysis %>%
+  mutate(D_honors_flag = ifelse(D_course_rigor == "Above Standard" & D_dual_credit_flag == "N" & D_AP_flag == "N", "Y", "N"))
+
+#and lets check that it worked by looking at a couple of the courses
+honors_flag_check <- base_analysis %>%
+  filter(D_honors_flag == "Y") %>%
+  select(D_course_name.x, D_course_rigor, D_dual_credit_flag, D_AP_flag, D_honors_flag)
+print(honors_flag_check)
+  
+#looks right to me, its all these Pre-AP classes. Now lets look at the breakdown of what percent of overall course-taking at each school is one of these advadnce course types
+
+# Calculate the breakdown of students taking advanced courses by campus
+advanced_student_breakdown <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>%
+  mutate(
+    advanced_type = case_when(
+      D_dual_credit_flag == "Y" ~ "Dual Credit",
+      D_AP_flag == "Y" ~ "AP",
+      D_honors_flag == "Y" ~ "Honors",
+      TRUE ~ "Other"  # Just in case there's an unflagged advanced course
+    )
+  ) %>%
+  group_by(location_rollup, advanced_type) %>%
+  summarise(distinct_students = n_distinct(D_stu_id), .groups = 'drop') # Count distinct students
+
+# Calculate the total number of unique students per campus
+total_students_per_campus <- base_analysis %>%
+  group_by(location_rollup) %>%
+  summarise(total_students = n_distinct(D_stu_id), .groups = 'drop') # Count total unique students
+
+# Join the breakdown with the total students and calculate percentages
+advanced_student_percentage <- advanced_student_breakdown %>%
+  left_join(total_students_per_campus, by = "location_rollup") %>%
+  mutate(percentage = round((distinct_students / total_students) * 100, 1)) %>%
+  arrange(location_rollup, desc(percentage))
+
+# Print the summary table
+print(advanced_student_percentage %>% flextable())
+
+
+
+```
+
+#e. count of advanced course enrollments by advanced course type
+```{r}
+# Create an "honors" flag
+base_analysis <- base_analysis %>%
+  mutate(D_honors_flag = ifelse(D_course_rigor == "Above Standard" & D_dual_credit_flag == "N" & D_AP_flag == "N", "Y", "N"))
+
+# Check that the honors flag worked
+honors_flag_check <- base_analysis %>%
+  filter(D_honors_flag == "Y") %>%
+  select(D_course_name.x, D_course_rigor, D_dual_credit_flag, D_AP_flag, D_honors_flag)
+print(honors_flag_check)
+
+# Calculate the breakdown of advanced course enrollments by campus
+advanced_course_breakdown <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>%
+  mutate(
+    advanced_type = case_when(
+      D_dual_credit_flag == "Y" ~ "Dual Credit",
+      D_AP_flag == "Y" ~ "AP",
+      D_honors_flag == "Y" ~ "Honors",
+      TRUE ~ "Other"  # Just in case there's an unflagged advanced course
+    )
+  ) %>%
+  group_by(location_rollup, advanced_type) %>%
+  summarise(course_enrollments = n(), .groups = 'drop') # Count course enrollments
+
+# Calculate the total number of course enrollments per campus
+total_enrollments_per_campus <- base_analysis %>%
+  group_by(location_rollup) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') # Count total course enrollments
+
+# Join the breakdown with the total enrollments and calculate percentages
+advanced_course_percentage <- advanced_course_breakdown %>%
+  left_join(total_enrollments_per_campus, by = "location_rollup") %>%
+  mutate(percentage = round((course_enrollments / total_enrollments) * 100, 1)) %>%
+  arrange(location_rollup, desc(percentage))
+
+# Print the summary table
+print(advanced_course_percentage %>% flextable())
+
+
+```
+
+
+#f. Overall FRL of snapshot students here
+```{r}
+# Count of students by FRL status
+FRL_percentage <- base_analysis %>%
+  group_by(location_rollup, D_stu_frl) %>%
+  summarise(count_students = n_distinct(D_stu_id), .groups = 'drop') %>%
+  pivot_wider(names_from = D_stu_frl, values_from = count_students, values_fill = list(count_students = 0)) %>%
+  mutate(Total = rowSums(across(where(is.numeric)))) %>%
+  mutate(FRL_percentage = round((Y / Total) * 100, 1)) %>%
+  select(location_rollup, Y, N, Total, FRL_percentage) %>%
+  arrange(desc(FRL_percentage))
+
+print(FRL_percentage)
+
+
+
+```
+
+#g. Advanced Course Success
+###i. by school
+```{r}
+#grade bucket distribution
+advandced_student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>% 
+  group_by(location_rollup, C_grade_pct_rollup) %>%  
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+advandced_student_count <- advandced_student_count %>%
+  bind_rows(
+    advandced_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(location_rollup = "Total")
+  )
+
+# Add a column for the column total
+advandced_student_count <- advandced_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+advandced_student_count %>% flextable()
+
+# Create a percentage table
+advandced_student_count <- advandced_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+advandced_student_count %>% flextable()
+
+#same thing but just by pass/fail
+
+advandced_student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>% 
+  group_by(location_rollup, D_pass_fail) %>%  
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+advandced_student_count <- advandced_student_count %>%
+  bind_rows(
+    advandced_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(location_rollup = "Total")
+  )
+
+# Add a column for the column total
+advandced_student_count <- advandced_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+advandced_student_count %>% flextable()
+
+# Create a percentage table
+advandced_student_count <- advandced_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+advandced_student_count %>% flextable()
+
+```
+
+###ii. by advadnced course type
+```{r}
+
+# Create an "honors" flag
+base_analysis <- base_analysis %>%
+  mutate(D_honors_flag = ifelse(D_course_rigor == "Above Standard" & D_dual_credit_flag == "N" & D_AP_flag == "N", "Y", "N"))
+
+# Check that the honors flag worked
+honors_flag_check <- base_analysis %>%
+  filter(D_honors_flag == "Y") %>%
+  select(D_course_name.x, D_course_rigor, D_dual_credit_flag, D_AP_flag, D_honors_flag)
+print(honors_flag_check)
+
+# Calculate the breakdown of advanced course enrollments by campus and pass/fail status
+advanced_course_breakdown <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>%
+  mutate(
+    advanced_type = case_when(
+      D_dual_credit_flag == "Y" ~ "Dual Credit",
+      D_AP_flag == "Y" ~ "AP",
+      D_honors_flag == "Y" ~ "Honors",
+      TRUE ~ "Other"  # Just in case there's an unflagged advanced course
+    )
+  ) %>%
+  group_by(location_rollup, advanced_type, D_pass_fail) %>%
+  summarise(course_enrollments = n(), .groups = 'drop') # Count course enrollments
+
+# Calculate the total number of course enrollments per campus
+total_enrollments_per_campus <- base_analysis %>%
+  group_by(location_rollup) %>%
+  summarise(total_enrollments = n(), .groups = 'drop') # Count total course enrollments
+
+# Join the breakdown with the total enrollments and calculate percentages
+advanced_course_percentage <- advanced_course_breakdown %>%
+  left_join(total_enrollments_per_campus, by = "location_rollup") %>%
+  mutate(percentage = round((course_enrollments / total_enrollments) * 100, 1)) %>%
+  arrange(location_rollup, desc(percentage))
+
+# Print the summary table
+print(advanced_course_percentage %>% flextable())
+
+```
+
+###iii. by race/ethnicity
+```{r}
+#same thing but just by pass/fail
+
+# Count of D_course_id by FRL status and C_stu_grade_buckets
+advandced_student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>% 
+  group_by(D_stu_race, D_pass_fail) %>%  
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+advandced_student_count <- advandced_student_count %>%
+  bind_rows(
+    advandced_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_race = "Total")
+  )
+
+# Add a column for the column total
+advandced_student_count <- advandced_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+advandced_student_count %>% flextable()
+
+# Create a percentage table
+advandced_student_count <- advandced_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+advandced_student_count %>% flextable()
+
+#grade bucket distribution
+advandced_student_count <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>% 
+  group_by(D_stu_race, C_grade_pct_rollup) %>%  
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = C_grade_pct_rollup, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+advandced_student_count <- advandced_student_count %>%
+  bind_rows(
+    advandced_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(D_stu_race = "Total")
+  )
+
+# Add a column for the column total
+advandced_student_count <- advandced_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric) & !contains("Total"))))
+
+# Print the table with column totals and row total
+advandced_student_count %>% flextable()
+
+# Create a percentage table
+advandced_student_count <- advandced_student_count %>%
+  rowwise() %>%
+  mutate(across(2:5, ~ round(. / sum(c_across(2:5)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+advandced_student_count %>% flextable()
+
+```
+
+#h. Dual Credit enrollment at New-Tech
+```{r}
+#The dual credit enrollment at new-tech is highrer than Ryan would expect, so want to understand what courses those students are taking/why its so much higher!
+# Filter to students at New Tech and dual credit courses, then count enrollments by unique course names
+new_tech_dual_enrollment <- base_analysis %>%
+  filter(location_rollup == "MANOR NEW TECHN", D_dual_credit_flag == "Y") %>%
+  group_by(D_course_name.x) %>%
+  summarise(enrollments = n(), .groups = 'drop') %>%
+  arrange(desc(enrollments))
+
+# Print the result
+print(new_tech_dual_enrollment)
+
+
+#same thing for manor high
+manor_high_dual_enrollment <- base_analysis %>%
+  filter(location_rollup == "Manor High Comprehensive", D_dual_credit_flag == "Y") %>%
+  group_by(D_course_name.x) %>%
+  summarise(enrollments = n(), .groups = 'drop') %>%
+  arrange(desc(enrollments))
+
+# Print the result
+print(manor_high_dual_enrollment)
+
+```
+
+#i. Advanced course type enrollment by year
+```{r}
+#looks right to me, its all these Pre-AP classes. Now lets look at the breakdown of each year by the percent of above standard courses that were taken broken out by Honors, Dual Credit, and APs
+# Filter for advanced courses and group by year and type of advanced course
+advanced_course_breakdown <- base_analysis %>%
+  filter(D_course_rigor == "Above Standard") %>%
+  mutate(
+    advanced_type = case_when(
+      D_dual_credit_flag == "Y" ~ "Dual Credit",
+      D_AP_flag == "Y" ~ "AP",
+      D_honors_flag == "Y" ~ "Honors",
+      TRUE ~ "Other"  # Just in case there's an unflagged advanced course
+    )
+  ) %>%
+  group_by(C_eoy_grade, advanced_type) %>%
+  summarise(count_students = n_distinct(D_stu_id), .groups = 'drop') %>%
+  arrange(C_eoy_grade, desc(count_students))
+
+# Print the summary table
+print(advanced_course_breakdown %>% flextable())
+
+
+
+```
+
+
+### Part IV: Follow on Analyses
+
+-   **What:** Conducting a set of follow on analyses for Manor ISD based on district interest
+
+-   **Check:** When writing new code, double check that everything is methodologically sound and that the code is clean and easy to read
+
+-   **Project Action:** None
+
+#4.1 Course seats by pathway w/out principles courses
+```{r}
+# Count of course seats by pathway
+# Count of D_course_id by C_pathway with filter for C_multiple_cats == "N" and total row
+pathways_course_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "N") %>%
+  filter(C_pathway_course_level != "Level 1") %>% #filters out level 1 courses
+  group_by(C_pathway) %>%
+  summarise(course_count = n(), .groups = 'drop') %>%
+  arrange(C_pathway)
+
+# Add total row
+total_course_count <- pathways_course_count %>%
+  summarise(C_pathway = "Total", course_count = sum(course_count))
+
+final_course_count <- bind_rows(pathways_course_count, total_course_count)
+
+# Print the table
+final_course_count %>% flextable()
+
+
+#same thing but for coruses that go across multiple pathways
+# Count of D_course_id by C_pathway with filter for C_multiple_cats == "N" and total row
+pathways_course_count <- snapshot_pathways_table_2023 %>%
+  filter(Multiple_pathways == "Y") %>%
+   filter(C_pathway_course_level != "Level 1") %>% #filters out level 1 courses
+  group_by(C_pathway) %>%
+  summarise(course_count = n(), .groups = 'drop') %>%
+  arrange(C_pathway)
+
+# Add total row
+total_course_count <- pathways_course_count %>%
+  summarise(C_pathway = "Total", course_count = sum(course_count))
+
+final_course_count <- bind_rows(pathways_course_count, total_course_count)
+
+# Print the table
+final_course_count %>% flextable()
+
+```
+
+
+#4.2 Pathway Failure Rate w/out Principles Courses
+```{r}
+
+pathways_student_count <- snapshot_pathways_table_2023 %>%
+  group_by(C_pathway, D_pass_fail) %>% 
+  filter(C_pathway_course_level != "Level 1") %>% #filters out level 1 courses
+  summarise(course_count = n(), .groups = 'drop') %>%  # Changed to count D_course_id
+  pivot_wider(names_from = D_pass_fail, values_from = course_count, values_fill = list(course_count = 0))
+
+# Add a row to sum the column totals
+pathways_student_count <- pathways_student_count %>%
+  bind_rows(
+    pathways_student_count %>%
+      summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+      mutate(C_pathway = "Total")
+  )
+
+# Add a column for the column total
+pathways_student_count <- pathways_student_count %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Print the table with column totals and row total
+pathways_student_count %>% flextable()
+
+# Create a percentage table
+percentage_student_count <- pathways_student_count %>%
+  rowwise() %>%
+  mutate(across(2:4, ~ round(. / sum(c_across(2:4)) * 100, 1), .names = "percent_{col}"))
+
+# Print the percentage table sorted by the total column
+percentage_student_count %>% flextable()
+
+
+```
+
+#4.3 Engineering enrollment
+```{r}
+#what courses were students enrolled in engineering taking?
+engineering_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Engineering") %>% 
+  group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+```
+
+#4.4 Web Development Enrollment
+```{r}
+#what courses were students enrolled in web development taking?
+web_dev_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Web Development") %>% 
+  group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#and where are those enrollments
+web_dev_deep_dive <- snapshot_pathways_table_2023 %>%
+  filter(C_pathway == "Web Development") %>% 
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+```
+
+
+#4.5 Dual Credit Investiagation
+```{r}
+#Lets reminder ourselves what overall dual credit enrollment looks like
+dual_credit_deep_dive <- base_analysis %>%
+  filter(D_dual_credit_flag == "Y") %>% 
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#so 133 total enrollments
+
+#and how many unique students
+dual_credit_deep_dive <- base_analysis %>%
+  filter(D_dual_credit_flag == "Y") %>% 
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#For 93 students, and it sounds like Dr.Harvey was expecting the number at Manor High to be much higher.
+
+#what courses are they enrolling in?
+dual_credit_deep_dive <- base_analysis %>%
+  filter(D_dual_credit_flag == "Y") %>% 
+  group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#Okay, I am going to go back and check the course catalog for some of these similar course names to see if we were missing anything. Looks like we missed 7 courses across a number of course IDs, I am going to check the enrollment size of those courses to see how large the discrepency is
+missing_dual_credits <- base_analysis %>%
+  filter(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD")) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#so this captures 149 additional enrollments, across how many students?
+missing_dual_credits <- base_analysis %>%
+  filter(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD")) %>%
+  distinct(D_stu_id, .keep_all = TRUE) %>%
+  summarize(unique_students = n()) %>%
+  print()
+
+#for 134 students, lets see where they were
+missing_dual_credits <- base_analysis %>%
+  filter(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD")) %>%
+  group_by(location_rollup) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+#okay mostly Manor High, which makes sense for what Dr.Harvey was saying on the call.
+
+#lets make a list of all of the distinct IDs in the missing_dual_credits data-frame
+# Step 1: Get a string of all unique student IDs in missing_dual_credits
+missing_dual_credits <- base_analysis %>%
+  filter(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD")) %>%
+  distinct(D_stu_id, .keep_all = TRUE)
+
+# Extract unique student IDs as a string
+unique_student_ids <- missing_dual_credits %>%
+  pull(D_stu_id) %>%
+  unique()
+
+# Step 2: Filter a new dataframe to just dual credit IDs and see how many of the student IDs from step 1 are present
+dual_credit_students <- base_analysis %>%
+  filter(D_dual_credit_flag == "Y")
+
+# Find the intersection of student IDs from missing_dual_credits and dual_credit_students
+students_with_dual_credit <- dual_credit_students %>%
+  filter(D_stu_id %in% unique_student_ids)
+
+# Count the number of unique student IDs
+num_students_with_dual_credit <- students_with_dual_credit %>%
+  distinct(D_stu_id) %>%
+  nrow()
+
+# Print the result
+print(num_students_with_dual_credit)
+
+#so 20 already dual credit enrollment tagged, which means we were missing 114 students who were taking dual credit courses (seems about right!). Now what I will probably do is go back, add in these courses as flag "Y" for dual credit in the script, re-run the script, and re-run the charts with dual credit enrollments.
+
+#just out of curosity, what was the enrollment in each of those classes that I missed
+missing_dual_credits <- base_analysis %>%
+  filter(D_course_id %in% c("DRAM 1310", "EDUC 1300", "GOVT 2036", "HUMA 1301", "HUMA 1302", "CMTHEA", "CMTHEB", "CMTHIA", "CMTHIB", "COALGA", "COALGB", "COALGM", "PSYC", "PSYCD")) %>%
+  group_by(D_course_name.x) %>%
+  summarize(enrollments = n()) %>%
+  arrange(desc(enrollments)) %>%
+  print()
+
+
+```
+
+
+
+#Part V: Export File
+-   **What:** The below exports all your check tables to an excel file in the folder path you set above
+
+-   **Check:** look at your data in the environment after running the code block below and be sure that all your variables have the follow the standard naming convention (D tag, lower case, underscores)
+
+-   **Project Action:** Optional - change the file name
+```{r}
+#save merged files for next phase
+# Get today's date
+current_date <- format(Sys.Date(), "%m.%d.%y") # will update with the date it was last run
+
+# Write dataframe to Excel file with today's date included in the filename
+write.xlsx(cohort_pathways_table,
+           file = paste0(full_file_path, "XXX", current_date, ".xlsx"),
+           rowNames = FALSE)
+
+# Write dataframe to Excel file with today's date included in the filename
+write.xlsx(merged_transcript_cohort,
+           file = paste0(full_file_path, "XXX", current_date, ".xlsx"),
+           rowNames = FALSE)
+
+```

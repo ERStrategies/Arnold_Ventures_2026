@@ -1,0 +1,845 @@
+---
+title: "2_cross_file_validation"
+author: "Simon Ellis"
+reviewer: "Zach Friedman"
+initial write-up: "July 30 2024"
+review:
+last update: "April 10 2025"
+output: html_document
+  toc: yes
+  df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and Connect to Sharepoint
+
+-   **What:** Before you start with scripts in R, its recommended to review the analysis guidance in Tettra here- <https://app.tettra.co/teams/ersknowledge/pages/transcript-analysis-start-here>, or reach out to a transcript analysis expert for more information! (Valentina, Simon, Laurel, Rebel, etc.)
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+# Part 1: Set your folder path(s) and read in your data
+
+## 1.1 Bring in data for a Singular File
+
+-   **What:** The code below sets file path and brings in data from one file. Note that for this script, you will be validating across your already validated data sources and files, so you should read in multiple files below. At this point, column names should be cleaned, match ERS common naming conventions, and be in the correct format.
+
+-   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
+
+```{r, warning = F, message = F}
+
+raw_data_folder_path <- "Core Services/Strategy & Innovation/Data Strategy & Innovation/3. R Stuff/Transcript Templatization (2024)/Dummy Data"
+
+#transcript data
+transcript_data_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "HPS_transcript_validated.csv",
+  drive_name = "internal_drive")
+
+#student data
+student_data_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "HPS_stu_rollup.csv",
+  drive_name = "internal_drive")
+
+#course catalog data
+course_catalog_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "1_course_catalog_validated.xlsx",
+                   drive_name = "internal_drive")
+
+```
+
+### 1.4 View your data
+
+**ACTION: Replace "raw_data" with the same name of your data frame you used above, and run the code to inspect your data.**
+
+```{r, eval = interactive()}
+View(transcript_data_validated)
+view(student_data_validated)
+```
+
+## Part 2: Validate Data
+
+### 2.1 Run ers_column_info on your data
+
+**ACTION: Replace "raw_data" with the name of your data frame**
+
+```{r}
+ers_column_info(student_data_validated)
+ers_column_info(transcript_data_validated)
+ers_column_info(course_catalog_validated)
+
+```
+
+### 2.2 Student counts
+
+#### a. Return distinct student counts in student, transcript, and school files
+
+-   **What:** Comparing student counts across files to check that they are comparable. You might see different counts across data-sources due to data integrity differences or reporting differences. For example, enrollment files often contain more records than stored grades or transcript files.
+
+-   **Check:** Are the student counts similar? How many overlapp between files?
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+# Function: takes a dataset + label and returns distinct counts by year + overall
+calculate_dynamic_counts <- function(data, label) {
+  # Get all unique years
+  years <- data %>% 
+    distinct(D_year) %>% 
+    pull(D_year)
+  
+  # Calculate per-year counts
+  per_year_counts <- map_dfr(years, function(y) {
+    data %>%
+      filter(D_year == y) %>%
+      summarise(
+        Source = label,
+        Year = as.character(y),
+        Distinct_Student_Count = n_distinct(D_stu_id)
+      )
+  })
+
+  # Add all-years summary
+  all_years_count <- tibble(
+    Source = label,
+    Year = "All",
+    Distinct_Student_Count = n_distinct(data$D_stu_id)
+  )
+
+  bind_rows(per_year_counts, all_years_count)
+}
+
+
+# Named list of datasets and their labels
+datasets <- list(
+  "Student Data" = student_data_validated,
+  "Transcript Data" = transcript_data_validated
+)
+
+# Apply function to all datasets
+compare_student_counts <- imap_dfr(datasets, ~ calculate_dynamic_counts(.x, .y)) %>%
+   pivot_wider(
+    names_from = Year,
+    values_from = Distinct_Student_Count
+  ) %>% 
+  print()
+ 
+```
+
+#### b. Filter to schools of interest and return student counts
+
+**What:** Filtering to schools of interest and comparing student counts across files to check that they are comparable
+
+**Check:** Are the student counts similar?
+
+**Project Team Action:** Gut check/track, update schools of interest to specific district schools (ie. only schools included in analysis)
+
+**Run the Function**
+
+```{r}
+# Function: takes a dataset, label, and filter options and returns standardized student counts
+calculate_custom_counts <- function(data, label, filter_expr, group_vars = NULL, year = NULL) {
+  filtered_data <- data %>% filter({{ filter_expr }})
+  
+  result <- if (!is.null(group_vars)) {
+    filtered_data %>%
+      group_by(across(all_of(group_vars))) %>%
+      summarise(
+        Source = label,
+        Year = ifelse(is.null(year), "All", as.character(year)),
+        Distinct_Student_Count = n_distinct(D_stu_id),
+        .groups = "drop"
+      )
+  } else {
+    filtered_data %>%
+      summarise(
+        Source = label,
+        Year = ifelse(is.null(year), "All", as.character(year)),
+        Distinct_Student_Count = n_distinct(D_stu_id)
+      )
+  }
+  
+  return(result)
+}
+
+```
+
+**Update the Variables & Run**
+
+```{r}
+
+#update
+school_ids_of_interest <-c(1, 4, 29, 39)
+school_names_of_interest <-c("Konawaena High School", 
+                             "Waikea High School", 
+                             "Hawaii Preperatory Academy") 
+years_of_interest <-c(2023)
+
+# Apply the function to various scenarios
+custom_counts <- bind_rows(
+  # Location counts (student data)
+  calculate_custom_counts(
+    data = student_data_validated,
+    label = "Student Data - Selected Schools",
+    filter_expr = D_location_id %in% school_ids_of_interest,
+    group_vars = c("D_location_id", "D_location_name")
+  ),
+
+  # Transcript data filtered by school names
+  calculate_custom_counts(
+    data = transcript_data_validated,
+    label = "Transcript Data - Selected Schools",
+    filter_expr = D_location_name %in% school_names_of_interest
+  ),
+
+  # Student data 2023
+  calculate_custom_counts(
+    data = student_data_validated,
+    label = "Student Data - 2023",
+    filter_expr = D_year %in% years_of_interest & D_location_id %in% school_ids_of_interest,
+    year = years_of_interest
+  ),
+
+  # Transcript data 2023
+  calculate_custom_counts(
+    data = transcript_data_validated,
+    label = "Transcript Data - 2023",
+    filter_expr = D_year %in% years_of_interest & D_location_name %in%
+      school_names_of_interest,
+    year = years_of_interest
+  ),
+
+  # Student data by grade and year
+  calculate_custom_counts(
+    data = student_data_validated,
+    label = "Student Data by Grade",
+    filter_expr = D_stu_grade_level %in% c(9, 10, 11, 12),
+    group_vars = c("D_stu_grade_level", "D_year")
+  )
+)
+
+# View results
+print(custom_counts)
+```
+
+#### c. Return student ids that don't match between student and transcript files
+
+-   **What:** This is an important step to return student ids that don't match between files
+
+-   **Check:** Count of unique student ids should match your counts from step 2.1a (see your global environment under values for these new counts and compare). After returning the differing sets of student ids, check your work by choosing a few student ids to search for in each file. For example, if XXX is returned as a student id existing in transcript but not student, search for that in in both to confirm
+
+-   **Project Team Action:** Gut check/track. Discuss whether it makes sense to exclude these students with your team
+
+```{r}
+#get the unique D_stu_id values in student file
+stu_ids_stu_data <- unique(student_data_validated$D_stu_id) 
+
+#get the unique D_stu_id values in transcript file
+stu_ids_transcript_data <- unique(transcript_data_validated$D_stu_id)
+
+#get the ids that are different
+#this line of code returns student ids that exist in student data but not transcript data
+stu_ids_in_stu_not_transcript <- setdiff(stu_ids_stu_data, stu_ids_transcript_data) 
+
+#this line of code returns student ids that exist in transcript data but not student data
+stu_ids_in_transcript_not_stu <- setdiff(stu_ids_transcript_data, stu_ids_stu_data)
+
+# Get the IDs that are the same in both files
+stu_ids_in_both <- intersect(stu_ids_stu_data, stu_ids_transcript_data)
+
+# Count the number of distinct IDs that are the same between the two files
+count_same_ids <- length(stu_ids_in_both)
+
+# Count the number of distinct IDs that are different between the two files
+count_different_ids <- length(unique(c(stu_ids_in_stu_not_transcript, stu_ids_in_transcript_not_stu)))
+
+# Print the counts
+cat("Number of distinct IDs that are the same between the two files:", count_same_ids, "\n")
+cat("Number of distinct IDs that are different between the two files:", count_different_ids, "\n")
+
+
+```
+
+#### d. Filter to rows of student ids that exist in transcript file but not student file, and vice versa
+
+-   **What:** Filters to rows of student ids that exist in transcript file but not student file, and vice versa
+
+-   **Check:** Check that distinct counts in new filtered sets of student ids match distinct counts from step 2.1c
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#filter to student ids that exist in student file but not transcript file
+filtered_stu_ids_stu_data <- student_data_validated[student_data_validated$D_stu_id %in% stu_ids_in_stu_not_transcript, ]
+
+#filter to student ids that exist in transcript file but not student file
+filtered_stu_ids_trancript_data <- transcript_data_validated[transcript_data_validated$D_stu_id %in% stu_ids_in_transcript_not_stu, ]
+
+#check that distinct count in filtered_diff_stu_ids data frames matches distinct count in diff_stu_ids
+count_filtered_stu_ids_stu_data <- filtered_stu_ids_stu_data %>%
+  distinct(D_stu_id)
+
+# create a table with the counts of year in filtered_stu_ids_transcript_data
+ filtered_stu_ids_trancript_data %>%
+  group_by(D_year) %>%
+  summarise(count = n_distinct(D_stu_id)) %>%
+  ungroup()
+
+```
+
+#### e. Explore exit codes and enter/exit dates of mismatched student ids
+
+-   **What:** To determine if these mismatched student ids should be excluded and removed, explore the students' enter and exit dates and exit code descriptions (if you have them) in your filtered student data. In Lubbock, for example, these appeared to be students who left the district before they could get any grades. We removed these students (see next steps)
+
+-   **Check:** You are checking to see if these mismatched student ids are students who left the district to go to another educational institution before they could receive any grades
+
+-   **Project Team Action:** Discuss whether it makes sense to exclude these students with your team
+
+#### f. Add exclude flag to the student ids that don't match & remove students
+
+-   **What:** Add exclude flag to students who don't match between files and remove them
+
+-   **Check:** After removing the students, check that the number of rows is equal to the original number of rows minus the number of rows in your filtered data (when you filtered to the mismatched student ids). For example, if you had 2,000 rows of students who needed to be excluded from student file, and 60,000 rows, you should have 58,000 rows after removing those students from the file
+
+-   **Project Team Action:** None (run as is)
+
+##### i. Student File
+
+```{r}
+#add column with exclude flag
+ student_data_validated <- student_data_validated %>%
+   mutate(C_stu_exclude_flag = ifelse(D_stu_id %in% filtered_stu_ids_stu_data$D_stu_id, "exclude", "include"))
+ 
+# #check count with exclude flag to make sure it matches # rows in filtered student data set
+ exclude_count_stu_data <- sum(student_data_validated$C_stu_exclude_flag == "exclude")
+
+#check distinct count with exclude flag to make sure it matches
+student_data_validated %>%
+   filter(C_stu_exclude_flag == "exclude") %>%
+   summarise(distinct_count = n_distinct(D_stu_id))
+
+
+#check a student id that was a mismatch and should have exclude flag
+ stu_id_deep_dive_1 <- student_data_validated %>%
+   filter(D_stu_id == "XXX") %>% #update with student ID from your file
+   print()
+
+#removing excluded students from data
+student_data_validated <- student_data_validated %>% 
+   filter(C_stu_exclude_flag == "include")
+ 
+# #remove C_stu_exclude_flag column since you don't need it anymore
+student_data_validated <- select(student_data_validated, -C_stu_exclude_flag)
+
+#so from this point onwards, student data validated should ONLY have data that includes students that we have transcript data for. Does not imply a 1:1 year match, but does imply that we have transcript data for them.
+
+```
+
+##### ii. Transcript File
+
+```{r}
+#add column with exclude flag
+ transcript_data_validated <- transcript_data_validated %>%
+   mutate(C_stu_exclude_flag = ifelse(D_stu_id %in% filtered_stu_ids_trancript_data$D_stu_id, "exclude", "include"))
+ 
+#check count with exclude flag to make sure it matches
+ exclude_count_transcript_data <- sum(transcript_data_validated$C_stu_exclude_flag == "exclude")
+
+#check distinct count with exclude flag to make sure it matches
+ distinct_exclude_count_transcript_data <- transcript_data_validated %>%
+   filter(C_stu_exclude_flag == "exclude") %>%
+   summarise(distinct_count = n_distinct(D_stu_id))
+ 
+# #check a student id that was a mismatch and should have exclude flag
+ stu_id_deep_dive_2 <- transcript_data_validated %>%
+   filter(D_stu_id == "XXX") #update with student ID from your file
+ 
+#removing excluded students from data
+ transcript_data_validated <- transcript_data_validated %>% 
+   filter(C_stu_exclude_flag == "include")
+ 
+#remove C_stu_exclude_flag column since you don't need it anymore
+ transcript_data_validated <- select(transcript_data_validated, -C_stu_exclude_flag)
+
+
+```
+
+#### g. Check to make sure all student ids match now
+
+-   **What:** Check that count of distinct student ids in student and transcript file match
+
+-   **Check:** Check counts on unique student ids in each file type by looking in your environment under "values". There should not be any ids that are different between files now
+
+-   **Project Team Action:** None (run as is)
+
+```{r}
+#get the unique D_stu_id values in student file
+ stu_ids_stu_data2 <- unique(student_data_validated$D_stu_id) 
+ 
+#get the unique D_stu_id values in transcript file
+ stu_ids_transcript_data2 <- unique(transcript_data_validated$D_stu_id)
+
+#get the ids that are different
+ check_diff_stu_ids <- setdiff(stu_ids_stu_data2, stu_ids_transcript_data2 )
+ 
+ check_diff_transcript_ids <- setdiff(stu_ids_transcript_data2, stu_ids_stu_data2)
+ 
+# Count the number of distinct IDs that are different between the two files
+count_different_ids <- length(unique(c(check_diff_stu_ids, check_diff_transcript_ids)))
+
+# Print the counts
+cat("Number of distinct IDs that are different between the two files:", count_different_ids, "\n")
+ 
+```
+
+### 2.2 Compare locations across files
+
+#### a. Return counts of schools across files
+
+-   **What:** Return counts of schools across files
+
+-   **Check:** Compare counts across files, next step will further investigate
+
+-   **Project Team Action:** None (run as is)
+
+```{r}
+ #student file
+student_data_validated %>%
+   summarise(student_count = n_distinct(D_location_id))
+ 
+ #transcript file
+transcript_data_validated %>%
+   summarise(transcript_count = n_distinct(D_location_id)) 
+ 
+```
+
+#### b. Manual check: investigate location ids in each file to make sure you have all high schools, AND that location ids match and location names match
+
+-   **What:** Review the location ids in each file by viewing the data frames in new tabs
+
+-   **Check:** Check that you have the location ids you need in each file, and that the location names are consistent
+
+-   **TO RETURN TO:** Most districts won't have too many high schools - I think it's easier to just look in each file to see if you have the school codes you need, and that they match. Or you could also do a filter to high schools and then print the unique location codes in each dataframe (maybe quicker than the manual process)
+
+-   **Project Team Action:** Update Data Validations Table. If the school codes don't match, discuss with your team and reach out to your point person in the district
+
+#### c. Mismatched location ids
+
+-   **What:** Return location ids that do not match between transcript and student files
+
+-   **Check:** Investigate \~3 student ids that attended a location that is not in the student file. Search for that student in the transcript file and review their credit/grade history. Then conduct the deep dive codes to investigate their enter/exit information into the district in the student file. It is likely okay to keep these students - they won't be a part of your cohort analysis, but will be a part of your retention/transiency analysis and snapshot. You are mostly trying to get a better understanding of the sources of the mismatched location ids
+
+-   **Project Team Action:** Decide how to handle students who were enrolled in other location ids outside of the district, transferred in for a period of time, and then left
+
+```{r}
+ #get unique D_location_id values from each dataset
+ transcript_location_ids <- unique(transcript_data_validated$D_location_id)
+ student_location_ids <- unique(student_data_validated$D_location_id)
+ 
+ #find the D_location_id values that are in transcript_location_ids but not in student_location_ids
+ location_ids_not_in_student_data <- setdiff(transcript_location_ids, student_location_ids)
+ 
+#check a few student ids
+ 
+# ---- Function: Check Random Students ----
+check_random_students <- function(data, student_id_col = "D_stu_id", n = 5, seed = NULL) {
+  # Optional seed for reproducibility
+  if (!is.null(seed)) set.seed(seed)
+  
+  # Sample n unique student IDs
+  random_ids <- sample(unique(data[[student_id_col]]), n)
+
+  # Filter and return rows for those students, grouped for easy viewing
+  data %>%
+    filter(.data[[student_id_col]] %in% random_ids) %>%
+    arrange(.data[[student_id_col]]) %>%
+    group_by(.data[[student_id_col]])
+}
+
+
+# Check 5 random students
+check_random_students(location_ids_not_in_student_data, n = 5, seed = 123) #if you get a subscript out of bounds error- there are no IDs with mismatched locations! great!
+
+
+```
+
+#### d. Add school exclude flag
+
+**What:** There are two code chunks here:
+
+-   The first one creates a table that allows you to explore grade/school configurations. Or how many students are enrolled at each school per grade.
+
+-   The second code chunk creates a "exclude/include" flag based on the list of schools below. The schools in that list will get a "exclude" flag. Schools that usually considered for exclusion are Alternative, special ed or schools with specialized programming where the courses and information may not be comparable or reliable. This should be discussed with your project team ahead of time.
+
+-   **Check:** Review the list of schools by their flag
+
+-   **Project Team Action:**
+
+    1.  First, explore the different schools/grade configurations - this might provide some insight into alt/special ed schools and which ones to add to the exclude list
+
+    2.  Then update the second code chunk **schools_to_drop** section one with the ids of the schools in your district that you wish to exclude
+
+*Explore Schools Code Chunk*
+
+```{r}
+#review count of students by school across grades
+school_enroll_by_grade <- student_data_validated %>%
+  drop_na(D_stu_grade_level) %>%
+  group_by(D_location_name, D_stu_grade_level) %>%
+  summarise(Unique_Count = n_distinct(D_stu_id)) %>%
+  pivot_wider(names_from = D_stu_grade_level, 
+              values_from = Unique_Count, 
+              values_fill = 0) %>%
+  mutate(total_enrollment = rowSums(across(where(is.integer)), na.rm = TRUE),
+  across(where(is.integer), ~ round(. / total_enrollment, digits=2), .names = "{.col}_pct")) %>%
+   View()
+```
+
+*Create Exclude School Flag Column and Exclude Schools*
+
+##### i. Transcript File
+
+```{r}
+#set exclusion critera
+#update to your schools of interest, if necessary
+exclude_condition_transcript <- transcript_data_validated$D_location_id %in% c(1,2) 
+
+#add C_school_exclude_flag based on the condition
+transcript_data_validated <- transcript_data_validated %>%
+  mutate(C_school_exclude_flag = if_else(exclude_condition_transcript, "exclude", "include"))
+
+#check list of excluded schools to make sure the code worked
+transcript_data_validated %>%
+  filter(C_school_exclude_flag == "exclude") %>% 
+    distinct(D_location_id)
+
+#check list of included schools to make sure the code worked
+transcript_data_validated %>%
+  filter(C_school_exclude_flag == "include") %>%
+  distinct(D_location_id)
+
+```
+
+##### ii. Student File
+
+```{r}
+#set exclusion critera
+exclude_condition_student <- student_data_validated$D_location_id %in% c(1,2) #update to your schools of interest
+
+#add C_school_exclude_flag based on the condition
+student_data_validated <- student_data_validated %>%
+  mutate(C_school_exclude_flag = if_else(exclude_condition_student, "exclude", "include"))
+
+#check list of excluded schools to make sure the code worked
+student_data_validated %>%
+  filter(C_school_exclude_flag == "exclude") %>%
+  distinct(D_location_id) 
+
+#check list of included schools to make sure the code worked
+student_data_validated %>%
+  filter(C_school_exclude_flag == "include") %>%
+  distinct(D_location_id)
+
+```
+
+### 2.3 Course ID Counts
+
+#### a. Return distinct course id counts
+
+-   **What:** Return distinct course id counts in transcript, teacher (if it has course counts), and course catalog files
+
+-   **Check:** Compare across files - are they similar? If not, next steps will help you investigate
+
+-   **Project Team Action:** You may need to update individual fields based on your teams specific needs for analysis
+
+```{r}
+#calculate the distinct count of D_course_id for transcript file
+transcript_data_validated %>% 
+   summarise(distinct_count = n_distinct(D_course_id))
+
+#calculate the distinct count of D_course_id for course catalog file
+course_catalog_validated %>% 
+   summarise(distinct_count = n_distinct(D_course_id)) 
+
+```
+
+#### b. Mistmatched course ids
+
+-   **What:** Return course ids that don't match between transcript, and course catalog files in schools of interest
+
+-   **Check:** Count of unique course ids should match your counts from step 2.3a (see your global environment under values for these new counts and compare). After returning the differing sets of course ids, check your work by choosing a few course ids to search for in each file. For example, if XXX is returned as a course id existing in transcript but not student, search for that in in both to confirm
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+# Normalize course names in both transcript and catalog
+course_catalog_validated <- course_catalog_validated %>%
+  mutate(D_course_name_clean = str_to_lower(str_trim(D_course_name)))
+
+transcript_data_validated <- transcript_data_validated %>%
+  mutate(D_course_name_clean = str_to_lower(str_trim(D_course_name)))
+
+# First, get the unique D_course_id values in course catalog file
+course_ids_cc_data <- unique(course_catalog_validated$D_course_id)
+
+# Tag if course ID exists in catalog
+transcript_data_validated <- transcript_data_validated %>%
+  mutate(`course_in_catalog?` = ifelse(D_course_id %in% course_ids_cc_data, "yes", "no"))
+
+# Count distinct course IDs not in the course catalog
+transcript_data_validated %>%
+  filter(`course_in_catalog?` == "no") %>%
+  summarise(distinct_count = n_distinct(D_course_id)) %>%
+  print()
+
+# Get unique cleaned course names from the catalog
+course_name_cc_data <- unique(course_catalog_validated$D_course_name_clean)
+
+# Tag if normalized course name exists in catalog
+transcript_data_validated <- transcript_data_validated %>%
+  mutate(`course_name_in_catalog?` = ifelse(D_course_name_clean %in% course_name_cc_data, "yes", "no"))
+
+# Count distinct course names not in the catalog
+transcript_data_validated %>%
+  filter(`course_name_in_catalog?` == "no") %>%
+  summarise(distinct_count = n_distinct(D_course_name_clean)) %>%
+  print()
+
+# Count combinations of course ID and name matching status
+transcript_data_validated %>%
+  group_by(`course_in_catalog?`, `course_name_in_catalog?`) %>%
+  summarise(count = n_distinct(D_course_id), .groups = "drop") %>%
+  print()
+
+# Filter to just the "no", "no" cases to investigate
+missing_courses <- transcript_data_validated %>%
+  filter(`course_in_catalog?` == "no", `course_name_in_catalog?` == "no") %>%
+  select(D_course_id, D_course_name, D_course_name_clean) %>%
+  distinct()
+
+
+#There might be small naming differences in both the course key and the course name, so check that the titles look similar enough. Option for correciton here- write a .csv of these no's to Fuzzy lookup into the course catalog in excel, and then bring back into R. Follow the guideance listed here in Tettra, and uncomment the code below to export and run- https://app.tettra.co/teams/ersknowledge/pages/matching-names-in-excel-with-fuzzy-lookup
+
+```
+
+### 2.4 Student Grade Level
+
+#### a. More than one grade level
+
+-   **What:** Return student ids with more than one grade level in the same year
+
+-   **Check:** Check so that we can work to develop a source of truth for student grade level
+
+-   **Project Team Action:** None (run as is)
+
+```{r}
+#filter for rows where there are multiple distinct D_stu_grade values within the same D_year within the student data frame
+multiple_grades <- student_data_validated %>%
+  filter(!is.na(D_year)) %>% # Filter out rows where D_year is NA
+  group_by(D_stu_id, D_year) %>%
+  filter(n_distinct(D_stu_grade_level) > 1) %>%
+  distinct() %>% 
+  print() %>% 
+  ungroup()
+
+#get unique D_stu_id values with more than one D_stu_grade value within the same D_year
+unique_multiple_grades <- unique(multiple_grades$D_stu_id)
+
+# create a new dataframe with just these students
+multiple_grades_df <- student_data_validated %>%
+  filter(D_stu_id %in% unique_multiple_grades) %>% 
+  print()
+
+#count distinct students in the multiple grades dataframe
+count_distinct_multiple_grades <- multiple_grades_df %>%
+  summarise(count = n_distinct(D_stu_id)) %>%
+  print()
+```
+
+#### b. Investigate student ids with different grade levels
+
+-   **What:** Investigate student ids with different grade levels in the same year. The source of the mismatch can sometimes be when a student moves from one grade level to the next within the same school year, but in between semesters, and may be represented by a unique exit code.
+
+-   **Check:** Use code below to check three student ids in both student and transcript file to see why grade levels might differ
+
+-   **Project Team Action:** Decide on source of truth for student grade level(D_stu_id)
+
+```{r}
+# Step 1: Identify students with multiple grades in the same year
+multiple_grades_df <- student_data_validated %>%
+  filter(!is.na(D_year)) %>%
+  group_by(D_stu_id, D_year) %>%
+  filter(n_distinct(D_stu_grade_level) > 1) %>%
+  ungroup()
+
+# Step 2: Get first 3 unique student IDs from this subset
+sample_ids <- multiple_grades_df %>%
+  distinct(D_stu_id) %>%
+  slice_head(n = 3) %>%
+  pull(D_stu_id)
+
+# Step 3: Deep dive on those students
+student_deep_dive <- student_data_validated %>%
+  filter(D_stu_id %in% sample_ids) %>%
+  arrange(D_stu_id, D_year)
+
+# Optional: print for manual review
+print(student_deep_dive)
+
+```
+
+#### c. Pull grade level that students finished the year on
+
+-   **What:** To create one source of truth for student grade level, so we will pull the grade level that students finished the year on (max exit date each year). Also allows you to add any additional cleaning necessary for things like summer school, as helpful.
+
+-   **Check:** There are checks built in after each step including, checking that students don't have multiple rows with the same exit date by year
+
+-   **Project Team Action:** Adjust as necessary for your district context and analysis.
+
+##### i. Summer School (if necessary)
+
+-   **Comment Out if your district does not have summer school**
+
+```{r}
+# Write a new variable called C_summer_school2 that has a value of Y if any value of Summer school when grouped by student ID and year is Y 
+# This variable gives students a yes flag if they ever went to summer school in that year
+student_data_validated <- student_data_validated %>% 
+  group_by(D_stu_id, D_year) %>% 
+  mutate(C_summer_school2 = ifelse(any(D_summer_school == "Y"), "Y", "N")) %>% 
+  ungroup()
+
+# Remove rows for summer school because we do not need them and add a helper column with max and min exit date
+student_data_validated <- student_data_validated %>%
+ # filter(D_summer_school != "Y") %>% # Filter out rows where D_summer_school = #Y
+  group_by(D_stu_id, D_year) %>%
+  mutate(H_max_exit_date = max(D_stu_exit_date), 
+             H_min_enter_date = min(D_stu_enter_date)) %>%
+  ungroup() 
+
+# check for how many IDs still have multiple rows for the same student ID and year with different values of grade after removing summer school
+multiple_grades <- student_data_validated %>%
+  group_by(D_stu_id, D_year) %>%
+  filter(n_distinct(D_stu_grade) > 1) %>%
+  distinct
+
+#get unique D_stu_id values with more than one D_stu_grade value within the same D_year
+unique_multiple_grades <- unique(multiple_grades$D_stu_id)
+
+# create a new dataframe with just these students to take a look
+multiple_grades_df <- student_data_validated %>%
+  filter(D_stu_id %in% unique_multiple_grades) %>% 
+print()
+
+```
+
+##### ii. Create EOY Grade Level Flag
+
+```{r}
+# Create a new variable called C_eoy_grade that groups by student ID and year and selects the grade level that the student spent the most time in (aka D_stu_grade for the student with the highest value of M_days)
+student_one_grade <- student_data_validated %>%
+  group_by(`D_stu_id`, `D_year`) %>%
+  slice(which.max(M_days_enrolled)) %>%
+  ungroup() %>%
+  mutate(C_eoy_grade = D_stu_grade_level) %>%
+  select(D_stu_id, D_year, C_eoy_grade)
+
+# check for how many IDs still have multiple rows for the same student ID and year with different values of grade after removing summer school
+
+# should be zero
+multiple_grades <- student_one_grade %>%
+  group_by(D_stu_id, D_year) %>%
+  filter(n_distinct(C_eoy_grade) > 1) %>%
+  distinct
+print(multiple_grades)
+
+# Now do a left join with student_data_validated by D_stu_id and D_year
+student_data_validated <- student_data_validated %>%
+  safe_left_join(student_one_grade, by = c("D_stu_id", "D_year"))
+
+```
+
+#### d. Check grade level distribution of C_eoy_grade
+
+```{r}
+# Create a count of unique student IDs by year by C_eoy_grade
+grade_counts_eoy <- student_data_validated %>% 
+  filter(C_eoy_grade %in% c(9, 10, 11, 12)) %>% 
+  group_by(D_year, C_eoy_grade) %>% 
+  summarize(n = n()) %>% 
+  arrange(D_year, C_eoy_grade) %>%
+  ungroup() %>% 
+  print()
+
+# Now run this same table, but just for our schools of interest 
+grade_counts_filtered <- student_data_validated %>% 
+  filter(D_location_id %in% c(1, 2, 3, 4)) %>% #updated to your schools of interest (as necessary)
+  group_by(D_year, C_eoy_grade) %>% 
+  summarize(n = n()) %>% 
+  arrange(D_year, C_eoy_grade) %>%
+  ungroup() %>% 
+  print()
+
+```
+
+# Part 3: Upload File to Sharepoint
+
+-   **What:** Upload validated dataframes as .csv files to sharepoint for further analysis.
+
+-   **Check:** None/Update names of data-frames as needed for team.
+
+-   **Project Action:** None
+
+```{r}
+processed_data_folder_path <- "Core Services/Strategy & Innovation/Data Strategy & Innovation/3. R Stuff/Transcript Templatization (2024)/Dummy Data"
+
+ers_write_sharepoint(data = student_data_validated,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "HPS_stu_crossvalidated.csv",
+                    drive_name = "internal_drive") 
+
+ers_write_sharepoint(data = transcript_data_validated,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "HPS_transcript_crossvalidated.csv",
+                    drive_name = "internal_drive") 
+```
+
+## Part 4: Knit the file into a nicely formatted HTML that you can share with teammates!
+
+**ACTION: ALL YOU NEED TO DO IS Use Ctrl+Shift+K to knit your file, and it will upload an html file to your Github repo in a folder called "knitted files"!**
+
+## OPTIONAL Part 5: Upload knitted file to Sharepoint
+
+**ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
+
+```{r eval = FALSE}
+# You can change the destination path of your knitted file here if you wish
+destination_of_knitted_file <- processed_data_folder_path
+
+# Define the path to the current R Markdown file
+current_file <- rstudioapi::getActiveDocumentContext()$path
+
+# Determine the output directory and file name for the knitted HTML
+output_dir <- dirname(current_file)
+output_file <- gsub(" ", "-", paste0(tools::file_path_sans_ext(basename(current_file)), ".html"))
+knitted_file <- file.path(output_dir, "knitted files", output_file)
+
+
+client_work_drive <- orgfiles_site$get_drive("Client Work")
+
+client_work_drive$upload_file(knitted_file, dest = file.path(destination_of_knitted_file, output_file))
+
+```

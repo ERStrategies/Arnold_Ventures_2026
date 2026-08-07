@@ -1,0 +1,295 @@
+---
+title: "3_transcript_rollup"
+author: "Simon Ellis"
+reviewer: "Zach Friedman"
+initial write-up: "July 31 2024"
+review:
+last update: "April 11 2025"
+output: html_document
+  toc: yes
+  df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and Connect to Sharepoint
+
+-   **What:** Before you start with scripts in R, its recommended to review the analysis guidance in Tettra here- https://app.tettra.co/teams/ersknowledge/pages/transcript-analysis-start-here, or reach out to a transcript analysis expert for more information! (Valentina, Simon, Laurel, Rebel, etc.)
+
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+# Part 1: Set your folder path(s) and read in your data
+
+## 1.1 Bring in data for a Singular File
+
+-   **What:** The code below sets file path and brings in data from one file. If your data is spread out over multiple files - i.e., **one file per year, go to step 1.1**
+
+-   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
+
+```{r, warning = F, message = F}
+
+raw_data_folder_path <- "**Set Folder Path**"
+
+#bring in files
+
+#course catalog
+course_catalog_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "2023 Lubbock Course Catalog.xlsx")
+#transcript
+transcript_data_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "Transcript Rollup 12.19.23.xlsx", sheet_name = "Transcript Rollup")
+
+# Clean column names to remove spaces and special characters
+course_catalog_validated <- course_catalog_validated %>% clean_names()
+transcript_data_validated <- transcript_data_validated %>% clean_names()
+```
+
+
+### 1.4 View your data
+
+**ACTION: Replace "raw_data" with the same name of your data frame you used above, and run the code to inspect your data.**
+
+```{r, eval = interactive()}
+View(transcript_data_validated)
+View(course_catalog_validated)
+```
+
+## Part 2: Validate Data
+
+### 2.0 Check out the ers_column_info function as a starting place in your data validation (credits to Mauro!)
+
+**ACTION: Run the code below to see documentation on our custom function!**
+
+```{r, eval = interactive()}
+?ers_column_info
+```
+
+### 2.1 Run ers_column_info on your data
+
+**ACTION: Replace "raw_data" with the name of your data frame**
+
+```{r}
+ers_column_info(transcript_data_validated) 
+ers_column_info(course_catalog_validated)
+```
+
+# Part III: Roll Up
+
+### 3.1 Add new variables to the transcript data
+
+#### a. C_grade_pct_rollup
+
+**What:** Add new variables that may be necessary for later grade analysis. In this case, we are creating a new variable that will roll up the final grade into grade buckets to make it easier to analyze. If you did not recieve specific grade outcome data (A,B,C,D,F) from your district, you can skip this step.
+
+**check:** the code block should print without error
+
+**Project Team Action:** Adjusted grade buckets based on district guidance/team guidance
+
+
+```{r}
+## Create a new variable called C_grade_pct_rollup
+transcript_data <- transcript_data_validated %>% 
+  mutate(C_grade_pct_rollup = case_when(
+    D_final_grade == 0 ~ "0", 
+    D_final_grade >= 90 ~ "90+",
+    D_final_grade >= 80 ~ "80-89",
+    D_final_grade >= 70 ~ "70-79",
+    D_final_grade >= 60 ~ "60-69",
+    TRUE ~ "Not a grade"
+  ))
+
+```
+
+### 3.2 Remove any columns that are not needed
+
+**What:** Removes any columns from the course catalog that are not needed for the roll-up
+
+**check:** the code block should print without error
+
+```{r}
+course_catalog_validated <- course_catalog_validated %>% 
+  select(-c(
+            D_course_credit #this because we WANT to force transcript course credit
+            ))
+```
+
+### 3.3 Validation Checks
+
+**What:** Run checks on the course catalog to make sure that the data is clean and that the course IDs are unique.
+
+**check:** the code block should print without error
+
+**Project Team Action:** Gut check with team
+
+```{r}
+#how many unique course IDs in the catalog
+course_catalog_validated %>% 
+  summarize(count_courses = n_distinct(D_course_id))
+
+#how many unique course IDs in the transcript_data
+transcript_data_validated %>% 
+  summarize(count_courses = n_distinct(D_course_id))
+
+#And how many match between the two?
+tibble(D_course_id = intersect(course_catalog_validated$D_course_id, transcript_data_validated$D_course_id)) %>%
+  summarize(n_courses_in_both = n_distinct(D_course_id))
+
+#and how many are in the transcript data but not in the course catalog?
+course_ids_not_in_catalog <- setdiff(transcript_data_validated$D_course_id, course_catalog_validated$D_course_id) %>% 
+  length()
+
+#Should be zero, but if not, add additional code and investigation to identify which courses need to be added or do not exist between the two files
+transcript_data_validated %>%
+  filter(!(D_course_id %in% course_catalog_validated$D_course_id)) %>%
+  distinct(D_course_id) %>%
+  arrange(D_course_id)
+
+```
+
+### 3.4 Join data frames
+
+**What:** Using safeleftjoin, join the course catalog and course coding from excel with the transcript data to create one source of truth for student grade/credit/and course taking information, creating a new data-frame "transcript_rollup".
+
+**check:** The code block should print without error
+
+**Project Team Action:** Based on your data structure, edit the ending code to make any final adjustments to column names or remove any columns you won't need for analysis.
+
+```{r}
+#Check if there are any duplicate IDs in the course catalog unique, as this will cause errors when creating the rollup. At this point, you should have only unique course IDs.
+course_catalog_validated %>% 
+  count(D_course_id) %>% 
+  filter(n > 1)
+
+#merge into transcript file by course ID and course Name
+transcript_roll_up <- transcript_data_validated %>% 
+ safe_left_join(course_catalog_validated, by = c("D_course_id" = "D_course_id"))
+
+#count course ids in rollup file
+transcript_roll_up %>% 
+  summarize(count_courses = n_distinct(D_course_id)) 
+
+#rename fields, lose columns you no longer need
+# transcript_roll_up <- transcript_roll_up %>% 
+#   select(-c(
+#             `course_in_catalog?`,
+#             `course_name_in_catalog?`,
+#             `D_course_name.y`
+#             ))
+
+```
+
+### 3.5 Student Deep Dives
+
+```{r}
+# ---- Function: Check Random Students ----
+check_random_students <- function(data, student_id_col = "D_stu_id", n = 5, seed = NULL) {
+  # Optional seed for reproducibility
+  if (!is.null(seed)) set.seed(seed)
+  
+  # Sample n unique student IDs
+  random_ids <- sample(unique(data[[student_id_col]]), n)
+
+  # Filter and return rows for those students, grouped for easy viewing
+  data %>%
+    filter(.data[[student_id_col]] %in% random_ids) %>%
+    arrange(.data[[student_id_col]]) %>%
+    group_by(.data[[student_id_col]])
+}
+
+
+# Check 5 random students from transcript_roll_up
+check_random_students(transcript_roll_up, n = 5, seed = 123)
+
+```
+
+**What:** Now that we have a rolled up transcript and course catalog, just hand check a few students to make sure that their enrollments make sense, and that the course coding seems to be copying over correctly
+
+**check:** Gut check that everything has copied over as you would expect
+
+**Project Team Action:** Gut check, track, follow up with any inconsistencies
+
+```{r}
+#check a few students
+# ---- Function: Check Random Students ----
+check_random_students <- function(data, student_id_col = "D_stu_id", n = 5, seed = NULL) {
+  # Optional seed for reproducibility
+  if (!is.null(seed)) set.seed(seed)
+  
+  # Sample n unique student IDs
+  random_ids <- sample(unique(data[[student_id_col]]), n)
+
+  # Filter and return rows for those students, grouped for easy viewing
+  data %>%
+    filter(.data[[student_id_col]] %in% random_ids) %>%
+    arrange(.data[[student_id_col]]) %>%
+    group_by(.data[[student_id_col]])
+}
+
+
+# Check 5 random students from transcript_roll_up
+check_random_students(transcript_roll_up, n = 5, seed = 123)
+
+#and just finally double check the distinct count of Student Ids that we have in the transcript file
+transcript_roll_up %>% 
+  summarize(count_students = n_distinct(D_stu_id)) 
+
+```
+
+## Part 4: Upload File to Sharepoint
+
+
+-   **What:** Upload validated dataframes as .csv files to sharepoint for further analysis.
+
+-   **Check:** None/Update names of data-frames as needed for team.
+
+-   **Project Action:** None
+
+```{r}
+processed_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/District%20Partners/Columbus%20City/22-23%20Financial%20Equity%20&%20Funding%20System%20Design/1.%20Data%20&%20Analysis%20-%20Secure/Processed%20Data%20for%20R"
+
+ers_write_sharepoint(data = transcript_roll_up,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "transcript_roll_up.csv")
+```
+
+## Part 5: Knit the file into a nicely formatted HTML that you can share with teammates!
+
+**ACTION: ALL YOU NEED TO DO IS Use Ctrl+Shift+K to knit your file, and it will upload an html file to your Github repo in a folder called "knitted files"!**
+
+## OPTIONAL Part 5: Upload knitted file to Sharepoint
+
+**ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
+
+```{r eval = FALSE}
+# You can change the destination path of your knitted file here if you wish
+destination_of_knitted_file <- processed_data_folder_path
+
+# Define the path to the current R Markdown file
+current_file <- rstudioapi::getActiveDocumentContext()$path
+
+# Determine the output directory and file name for the knitted HTML
+output_dir <- dirname(current_file)
+output_file <- gsub(" ", "-", paste0(tools::file_path_sans_ext(basename(current_file)), ".html"))
+knitted_file <- file.path(output_dir, "knitted files", output_file)
+
+
+client_work_drive <- orgfiles_site$get_drive("Client Work")
+
+client_work_drive$upload_file(knitted_file, dest = file.path(destination_of_knitted_file, output_file))
+```

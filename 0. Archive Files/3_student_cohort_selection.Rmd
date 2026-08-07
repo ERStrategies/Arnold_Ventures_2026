@@ -1,0 +1,1309 @@
+---
+title: "3_student_cohort_selection"
+author: "Simon Ellis"
+reviewer: "Zach Friedman"
+initial write-up: August 12 2024
+review:
+last update:
+output: html_document
+  toc: yes
+  df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Part I: Setup
+
+This part of the script allows you to:
+
+-   Load the functions that R will be using to work with your data (Excel automatically loads all its functions - if, countif, index, match, etc. - when you open it, but R requires manual loading of functions if you want full access to what it offers)
+
+-   Specify the Sharepoint folder where your raw data lives so R can pull it in
+
+-   Actually load in the raw data you'll be working with throughout the rest of the script
+
+## 1.1 Load Packages
+
+-   **What:** This code block loads in all relevant function packages (a.k.a. R functions you'll be needing in this script). Note that if you haven't installed the packages into your computer yet, R will print an error and you'll need to install them first by running install.packages(tidyverse) and install.packages(formattable), etc.
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r, warning = F, message = F}
+library(tidyverse)
+library(data.table)
+library(dplyr)
+library(formattable)
+library(data.table)
+library(here)
+library(flextable)
+library(openxlsx)
+library(lubridate)
+library(safejoin)
+library(readxl)
+```
+
+## 1.2 Declare Variables
+
+-   **What:** This code block establishes a variable for code-users to define a consistent file path for loading data
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+### a. User Name
+
+```{r, warning = F, message = F}
+#action: add your user name in the file path. Add more user names for more team members
+user_name_team_member1 <- "C:/Users/XXX"
+user_name_team_member2 <- "XXX"
+user_name_team_member3 <- "XXX"
+```
+
+### b. File Path
+
+-   **What:** This code block creates a condensed file-path to the locally synced versions of your demographic data from sharepoint. You will have to edit to make it user/project specific.
+
+-   **Check:** No error message coming out of code block
+
+-   **Note:** File paths in R always use "/" instead of "", so you might need to manually change the direction of your slashes when you copy your folder path from Share point
+
+-   **Project Team Action:** Change the code below based on where your file is located. More specifically - find your path to the data by navigating to your folder in file explorer and then copying the path at the top of your file explorer. This path might be different for each team member depending on which folders they have synced to their One Drive
+
+```{r, warning = F, message = F}
+folder_path_team_member1 <- "XXX"
+folder_path_team_member2 <- "XXX"
+folder_path_team_member3 <- "XXX"
+```
+
+### c. Full Folder Path
+
+-   **What:** This code block combines the variables you created in the two previous steps to create one continuous file path to your data.
+
+-   **Check:** No error message coming out of code block, file path should match folder destination locally
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r, warning = F, message = F}
+
+#action: update the numbers at the end of the variables with your user number. E.g. if you are number 2, then change the number to 2 at the end of user_name_team_member and folder_path_team_member
+user_name <- user_name_team_member1
+folder_path <- folder_path_team_member1
+
+
+#action: leave unchanged (this combines your values above into a single file path)
+full_file_path <- paste0(user_name, folder_path)
+
+#check
+print(full_file_path)
+```
+
+### d. File Names
+
+-   **What:** This code block creates condensed versions of files names for ease of upload and analysis. You should update the code based on the specific names of your demographic files
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Update with specific file names
+
+-   **RT Methodological Note:** Lubbock sent three sets of student files, so need to upload all. This will not be the case for most districts
+
+```{r, warning = F, message = F}
+#update to your file name. There are several functions and options to read in data based on what form your raw data is in. The below code is for reading in a csv file. If your data is in a different format, you will need to use a different function. For example, if your data is in an excel file, you would use read_excel() instead of read.csv().
+
+#transcript
+transcript_rollup_path <- "/3_transcript_roll_up_DATE.xlsx" #update with your validated file date
+
+#student
+validated_student_path <- "/1_student_data_validated_DATE.xlsx" #update with your validated file date
+```
+
+## 1.3 Load Data
+
+**What:** Now that R knows how to access the folder path, it's time to load in your raw data
+
+**Check:** The code block should print the names of all data files you need
+
+**Project Team Action:** Update the col_types function with order of district specific columns (as necessary)
+
+```{r}
+#transcript
+validated_transcript_data <- read.xlsx(paste0(full_file_path, transcript_rollup_path))
+
+# student
+# Define the column types vector to ensure that entry and exit dates are read as dates. This is necessary because Excel files do not store data types, so R needs to be told what type of data is in each column. Update as necessary with district specific column
+col_types <- c("text", "text", "text", "text",
+               "date", "date",
+               "text", "text", "text", "text", "text", "text", "text",
+               "text", "text", "text", "text", "text"
+               )
+
+# Read data from an Excel file with specified column types
+validated_student_data <- read_excel(paste0(full_file_path, validated_student_path), col_types = col_types)
+
+#create new data frame to summarize column information
+col_info <-  data.frame(
+  Column_Name = names(course_catalog_combined),
+  Data_Type = sapply(course_catalog_combined, class),
+  Count_Rows = sapply(course_catalog_combined, function(x) length(na.omit(x))),
+  NA_Rows = sapply(course_catalog_combined, function(x) sum(is.na(x))),
+  Unique_Rows = sapply(course_catalog_combined, function(x) length(unique(na.omit(x)))),
+  stringsAsFactors = FALSE,
+  row.names= NULL
+)
+
+#check the column info
+col_info(validated_student_data)
+col_info(validated_transcript_data)
+
+```
+
+
+
+
+# Part II: Helper flags for 9th grade cohort
+
+###2.1 Choose and flag 9th grade students
+
+###a. Pre-flag total enrollment by year
+
+-   **What:** Before any flags, check the total enrollment by grade by year
+
+-   **Check:** None
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+# Create a table of the count of students by value of D_stu_grade and year and filtered to grades 9-12
+actual_enrollment <- validated_student_data %>% 
+  filter(D_stu_grade %in% 9:12) %>%
+  group_by(D_stu_grade, D_year) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  arrange(D_year, as.numeric(D_stu_grade))
+print(actual_enrollment)
+
+```
+
+
+### b. Flag students who ended SY 2020 as a 9th grader
+
+-   **What:** Add a flag for students who ended SY 2020 as a 9th grader
+
+-   **Check:** Check that no student ids have both include and exclude flags
+
+-   **Project Team Action:** None (run as is)
+
+```{r}
+# Add flags for students who were 9th graders in SY 2020 and 12th graders in SY 2023. 
+
+student_cohort <- validated_student_data %>%
+  group_by(D_stu_id) %>%
+  mutate(
+    H_9th_gr_SY2020 = if_else(
+      any(D_year == 2020 & D_stu_grade == "9"), #
+      "Y", "N"
+    ),
+    H_12th_gr_SY2023 = if_else(
+      any(D_year == 2023 & D_stu_grade == "12" ), 
+      "Y", "N"
+    )
+  ) %>%
+  ungroup()
+
+#count yes flags for both years 
+
+#9th
+ninth_flag_check <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y") %>%
+  summarize(count_students = n_distinct(D_stu_id))
+print(ninth_flag_check)
+
+#12th
+twelfth_flag_check <- student_cohort %>%
+  filter(H_12th_gr_SY2023 == "Y") %>%
+  summarize(count_students = n_distinct(D_stu_id))
+print(twelfth_flag_check)
+
+# Check for inconsistencies between include and exclude flags for both H_9th_gr_SY2020 and H_12th_gr_SY2023
+check <- student_cohort %>%
+  group_by(D_stu_id) %>%
+  summarize(
+    include_9th_gr = sum(H_9th_gr_SY2020 == "Y"),
+    exclude_9th_gr = sum(H_9th_gr_SY2020 == "N"),
+    include_12th_gr = sum(H_12th_gr_SY2023 == "Y"),
+    exclude_12th_gr = sum(H_12th_gr_SY2023 == "N")
+  ) %>%
+  filter((include_9th_gr > 0 & exclude_9th_gr > 0) | (include_12th_gr > 0 & exclude_12th_gr > 0))
+
+if (nrow(check) == 0) {
+  print("No inconsistencies found.")
+} else {
+  print("Inconsistencies found.")
+}
+```
+
+### c. Return 9th grade cohort counts
+
+-   **What:** Return counts of students who are part of 9th grade cohort across all years, and within SY 2020 to test that the proportions make sense
+
+-   **Check:** When calculating the % of students who are part of the 9th grade cohort in SY 2020, you would expect for ~25% to be included, since 9th graders should make up ~one-quarter of the students
+
+When calculating the % of students who are part of the 9th grade cohort, you would expect for less than one-seventh to be included, since only one-quarter were 9th graders in SY 2020, and three more grade level groups of students have been added into the student population (total of 7 other grade level groups). AND we would expect the % to be LESS than one-seventh because not all of these students stay in the district
+
+-   **Project Team Action:** Gut check/track
+
+
+```{r}
+#percent of students in 9th grade cohort in SY 2020
+student_cohort %>% 
+  filter(D_year == 2020) %>% 
+  group_by(H_9th_gr_SY2020) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  mutate(total_students = sum(count_students),
+         percentage = round(count_students / total_students *100, 1))
+
+
+# Now do the same thing, but for students with the 12th grade flag
+student_cohort %>% 
+  filter(D_year == 2023) %>% 
+  group_by(H_12th_gr_SY2023) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  mutate(total_students = sum(count_students),
+         percentage = round(count_students / total_students *100, 1))
+
+#percent of students in 9th grade cohort across all years
+student_cohort %>% 
+  group_by(H_9th_gr_SY2020) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  mutate(total_students = sum(count_students),
+         percentage = round(count_students / total_students *100, 1))
+
+# Create a table of the count of students by value of D_stu_grade and year
+student_cohort %>% 
+  group_by(D_stu_grade, D_year) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  arrange(D_year, as.numeric(D_stu_grade))
+
+# Now create the same table as above, but filter it to only our schools of interest
+student_cohort %>% 
+  filter(D_location_id %in% c(1, 2, 4, 29, 39, 43)) %>% #update to district specific location codes
+  group_by(D_stu_grade, D_year) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  arrange(D_year, as.numeric(D_stu_grade))
+
+```
+
+### d. Investigate ~3 "included" and "excluded" student ids
+
+-   **What:** Filter your data to a handful of random student ids to check that include/exclude flag is working as expected
+
+-   **Check:** Check a handful of student ids to make sure that you included and excluded students you would have expected
+
+-   **Project Team Action:** Update with district student IDs, Gut check/track
+
+```{r}
+# Review three excluded students, update with district specific student IDs
+student_dive <- student_cohort %>% filter(D_stu_id == XXX) 
+
+student_dive2 <- student_cohort %>% filter(D_stu_id == XXX)
+
+student_dive3 <- student_cohort %>% filter(D_stu_id == XXX)
+
+# review three included students
+student_dive4 <- student_cohort %>% filter(D_stu_id == 	
+XXX)
+
+student_dive5 <- student_cohort %>% filter(D_stu_id == XXX)
+
+student_dive6 <- student_cohort %>% filter(D_stu_id == XXX)
+
+```
+
+
+### e. Remove excluded students from data frame
+
+-   **What:** Remove excluded students from data frame based on H_9th_gr_SY2020 flag, removing any students who were not 9th grades in 2020
+
+-   **Check:** Check that new number of rows is equal to original number of rows minus the number of rows accounted for by "excluded" students
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#count number of rows accounted for by excluded students
+student_cohort %>% 
+  filter(H_9th_gr_SY2020 == "N") %>% 
+  nrow()
+
+#count number of rows accounted for by N/A students
+student_cohort %>%
+  filter(is.na(H_9th_gr_SY2020)) %>%
+  nrow()
+
+#remove excluded students and N/As 
+student_cohort <- student_cohort %>% 
+  filter(H_9th_gr_SY2020 == "Y")
+nrow(student_cohort)
+
+```
+
+
+## 2.2 Add flags to track student progression
+
+### a. Counts of cohort students who were present in subsequent years & repeated 9th grade
+
+-   **What:** Count students in the 9th grade cohort who were present in subsequent years
+
+-   **Check:** Counts should decrease as grade level increases since some students leave the district each year
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#count students in 9th grade cohort who were there in subsequent years
+student_cohort %>%
+  group_by(D_stu_id) %>%
+  filter(all(c(9, 10, 11, 12) %in% D_stu_grade)) %>%
+  summarise(total_unique_stu_count = n_distinct(D_stu_id)) %>%
+  count() %>% 
+  ungroup()
+
+#count # 10th graders in SY 2021
+student_cohort %>% 
+  filter(D_year == 2021 & D_stu_grade == "10") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#count # 11th graders in SY 2022
+student_cohort %>% 
+  filter(D_year == 2022 & D_stu_grade == "11") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#count # 12th graders in SY 2023
+student_cohort %>% 
+  filter(D_year == 2023 & D_stu_grade == "12") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+```
+
+### b. Add helper flags to above student groups
+
+-   **What:** Add flags to identify students in the 9th grade cohort who were present in subsequent years
+
+-   **Check:** Run "check flag" code blocks to check that the count of students with each flag matches the associated count of students in previous step 2.2 a
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#10th grade in SY 2021 flag
+student_cohort <- student_cohort %>% 
+  group_by(D_stu_id) %>%
+  mutate(H_10th_gr_SY2021 = if_else(any(D_year == 2021 & 
+                                        D_stu_grade == "10"),
+                                   "Y", "N")) %>%
+  ungroup()
+
+#check flag
+student_cohort %>% 
+  filter(H_10th_gr_SY2021 == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#11th grade in SY 2022 flag
+student_cohort <- student_cohort %>% 
+  group_by(D_stu_id) %>%
+  mutate(H_11th_gr_SY2022 = if_else(any(D_year == 2022 & 
+                                        D_stu_grade == "11"),
+                                   "Y", "N")) %>%
+  ungroup()
+
+#check flag
+student_cohort %>% 
+  filter(H_11th_gr_SY2022 == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#12th grade in SY 2023 flag
+student_cohort <- student_cohort %>% 
+  group_by(D_stu_id) %>%
+  mutate(H_12th_gr_SY2023 = if_else(any(D_year == 2023 & 
+                                       D_stu_grade == "12"),
+                                   "Y", "N")) %>%
+  ungroup()
+
+#check flag
+student_cohort %>% 
+  filter(H_12th_gr_SY2023 == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+```
+
+### c. Check 9th grade repeater numbers
+
+-   **What:** Add flags to identify students who were marked as 9th graders before 2020 (ie. likley repeated grades)
+
+-   **Check:** Run code block as is
+
+-   **Project Team Action:** Gut check/track
+
+
+```{r}
+#9th grade in SY 2019 flag
+student_cohort <- student_cohort %>% 
+  group_by(D_stu_id) %>%
+  mutate(C_9th_gr_SY2019 = if_else(any(D_year == 2019 & 
+                                        D_stu_grade == "9"),
+                                   "Y", "N")) %>%
+  ungroup()
+
+#check flag
+student_cohort %>% 
+  filter(C_9th_gr_SY2019 == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+```
+
+
+###d. Check proportion of students who Graduated
+
+-   **What:** Check the number of 12th graders who graduated
+
+-   **Check:** Run code block as is
+
+-   **Project Team Action:** Update exit code to district specific, Gut check/track
+
+```{r}
+#check number of students who graduated
+graduated_check <- student_cohort %>% 
+   filter(H_12th_gr_SY2023 == "Y" & 
+          D_year == "2023" &
+          D_stu_exit_code == "1") %>% #update to district specific exit codes
+   count()
+
+
+  
+# Filter to non-graduates and explore the data
+non_graduates <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y",
+         H_10th_gr_SY2021 == "Y",
+         H_11th_gr_SY2022 == "Y",
+         H_12th_gr_SY2023 == "Y",
+         D_year == 2023,
+         D_stu_exit_code != "1") #update to district specific exit codes
+
+# Count distinct student IDs
+distinct_count <- non_graduates %>%
+  summarise(count_students = n_distinct(D_stu_id))
+
+# Print the count of distinct student IDs
+print(distinct_count)
+
+```
+
+
+### e. Select students based on progression
+
+-   **What:** Flag students who meet the criteria in step 2.2b for each grade level and year as "Y" for overall H_stu_cohort helper flag
+
+-   **Check:** Check that distinct student count is now consistent across years and grades. The count should not change by year because now you have narrowed your cohort to the students who were present all four years, and followed the typical trajectory of 9th grade in SY 2020 --> 10th in SY 2021 --> 11th --> 12th
+
+-   **Project Team Action:** Gut check/track. This is a significant step in the rest of your analysis, and will have cascading impacts. Follow through i. to test where students are getting excluded.
+
+```{r}
+#flag students who were there all four years
+student_cohort$H_stu_cohort <- ifelse(
+    student_cohort$H_9th_gr_SY2020 == "Y" &
+    student_cohort$H_10th_gr_SY2021 == "Y" &
+    student_cohort$H_11th_gr_SY2022 == "Y" &
+    student_cohort$H_12th_gr_SY2023 == "Y",
+    "include",
+    "exclude"
+)
+
+#check - should be consistent across years
+student_cohort %>% 
+  filter(H_stu_cohort == "include") %>% 
+  group_by(D_stu_grade, D_year) %>% 
+  summarise(count_students = n_distinct(D_stu_id)) %>% 
+  arrange(as.numeric(D_stu_grade)) %>% 
+  ungroup()
+
+```
+
+
+#### i. Check number of excluded students at each level
+
+-   **What:** Check students who were excluded at each grade level
+
+-   **Check:** Code block should print without error
+
+-   **Project Team Action:** Gut check/track. This is a significant step in the rest of your analysis, and will have cascading impacts.
+
+```{r}
+# Check number of students excluded at each grade level
+
+#9th graders who did not make it to 10th grade
+student_cohort %>% 
+  filter(H_9th_gr_SY2020 == "Y" & H_10th_gr_SY2021 == "N") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#10th graders who did not make it to 11th grade
+student_cohort %>% 
+  filter(H_10th_gr_SY2021 == "Y" & H_11th_gr_SY2022 == "N") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#11th graders who did not make it to 12th grade
+student_cohort %>% 
+  filter(H_11th_gr_SY2022 == "Y" & H_12th_gr_SY2023 == "N") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+```
+
+
+## 2.3 Add flags to track student duration
+
+### a. Helper flag based on duration
+
+-   **What:** Add cohort selection criteria for including students who must have been enrolled in school for over 215 days (which is ~75% of the school year) in each year. 215 is the standard number reccomended by ERS, but may need to change based on unique district needs
+
+-   **Check:** Check new count and that students don't have both include / exclude flags
+
+-   **Project Team Action:** Gut check/track. This is a significant step in the rest of your analysis, and will have cascading impacts. Follow through i. to test where students are getting excluded.
+
+```{r}
+#create a new variable, "D_days_per_year" to sum the days in school per year. If a student has multiple entry/exit dates, this will sum the days in school for each entry/exit pair.
+student_cohort <- student_cohort %>%
+  group_by(D_stu_id, D_year) %>%
+  mutate(D_days_per_year = as.Date(D_stu_exit_date) - as.Date(D_stu_enter_date)) %>%
+  ungroup()
+
+#Ensure that days are numeric
+student_cohort <- student_cohort %>%
+  group_by(D_stu_id,D_year) %>%
+   mutate(D_days_per_year = as.numeric(D_days_per_year))
+      
+#Sum duration by student Id by year to account for multiple entry/exit dates
+students_duration <- student_cohort %>%
+  group_by(D_stu_id, D_year) %>%
+  summarize(H_sum_stay_duration_year = sum(D_days_per_year))
+
+#Join the H_sum_stay_duration_year back to the student_cohort data frame by both D_stu_id and D_year, which will be a one to many possible leftjoin
+student_cohort <- left_join(student_cohort, students_duration, by = c("D_stu_id", "D_year"))
+
+#checking that the code for assigning sum year duration worked
+students_to_check <- student_cohort %>%
+  group_by(D_stu_id) %>%
+  summarize(count = n()) %>% 
+              arrange(desc(count)) %>% 
+              ungroup() %>% 
+              print
+
+
+#Flag students for inclusion based on duration by year
+student_cohort <- 
+  student_cohort %>% 
+  group_by(D_stu_id) %>%
+  mutate(H_duration_9th = if_else(any(D_year == 2020 & 
+                                        H_sum_stay_duration_year >= 215),
+                                   "Y", "N")) %>%
+    mutate(H_duration_10th = if_else(any(D_year == 2021 & 
+                                        H_sum_stay_duration_year >= 215),
+                                   "Y", "N")) %>%
+    mutate(H_duration_11th = if_else(any(D_year == 2022 & 
+                                        H_sum_stay_duration_year >= 215),
+                                   "Y", "N")) %>%
+    mutate(H_duration_12th = if_else(any(D_year == 2023 & 
+                                        H_sum_stay_duration_year >= 215),
+                                   "Y", "N")) %>%
+  ungroup() 
+  
+#Adding a overall duration inclusion flag that looks across each new duration value and includes students with Y's in each column, and excludes students with an N in any column
+student_cohort <-
+  student_cohort %>%
+  mutate(
+    duration = ifelse(
+      (H_duration_9th == "Y") &
+      (H_duration_10th == "Y") &
+      (H_duration_11th == "Y") &
+      (H_duration_12th == "Y"),
+      "include",
+      "exclude"
+    )
+  )
+
+#check the duration flag for inconsistencies to make sure no student has both "include" and "exclude" for duration
+student_cohort %>%
+  group_by(D_stu_id) %>%
+  summarize(include_count = sum(duration == "include"),
+            exclude_count = sum(duration == "exclude")) %>% 
+  arrange(desc(exclude_count)) %>% 
+  filter(include_count > 0 & exclude_count > 0)
+
+#If you have zero rows, no students meet the critera for both include and exclude, which is what you want
+
+
+#Count the total number of include students based on duration
+student_cohort %>%
+  filter(duration == "include") %>%
+  summarize(count_students = n_distinct(D_stu_id))
+
+```
+
+#### i. Check number of excluded students at each level
+
+-   **What:** Check students who were excluded at each grade level
+
+-   **Check:** Code block should print without error
+
+-   **Project Team Action:** Gut check/track. This is a significant step in the rest of your analysis, and will have cascading impacts.
+
+```{r}
+#checks
+
+#number of students who did not meet the 215 day threshold in 9th grade
+student_cohort %>%
+  filter(H_duration_9th == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#number of students who did not meet the 215 day threshold in 10th grade
+student_cohort %>%
+  filter(H_duration_10th == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#number of students who did not meet the 215 day threshold in 11th grade
+student_cohort %>%
+  filter(H_duration_11th == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+#number of students who did not meet the 215 day threshold in 12th grade
+student_cohort %>%
+  filter(H_duration_12th == "Y") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+```
+
+### 2.4 Assign home school
+
+-   **What:** Assign students a home high school based on the location where they spent the majority of their time in the district
+
+-   **Check:** The code block should run without error
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#Count the distinct number of students by location before you filter to home school
+student_cohort %>% 
+  group_by(D_location_id) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print() %>% 
+  ungroup()
+
+#Counts the number of students who have multiple location Ids across years
+count_multiple_locations <- student_cohort %>%
+  group_by(D_stu_id) %>%
+  summarize(count_locations = n_distinct(D_location_id)) %>%
+  arrange(desc(count_locations)) %>%
+  print %>% 
+  ungroup()
+
+#Choose student home schools, which gives us one row per student per year for their home school
+home_schools <- student_cohort %>%
+  group_by(D_stu_id, D_location_id) %>%
+  summarize(H_stay_duration_home_school = sum(H_sum_stay_duration_year, na.rm = TRUE)) %>%
+  group_by(D_stu_id) %>%
+  filter(H_stay_duration_home_school == max(H_stay_duration_home_school)) %>%
+  ungroup() %>%
+  rename(C_home_school_code = D_location_id)
+
+#And join that back into the student_cohort dataframe
+student_cohort <- left_join(student_cohort, home_schools, by = "D_stu_id")
+
+#Check that the number of distinct students remained the same after the transformation and left-join
+student_cohort %>% 
+  group_by(C_home_school_code) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print() %>% 
+  ungroup()
+-
+#check that each student is assigned only one home school
+check_home_school <- student_cohort %>%
+  group_by(D_stu_id) %>%
+  summarize(count_home_schools = n_distinct(C_home_school_code)) %>%
+  filter(count_home_schools > 1)
+
+#add C_home_school_name flag
+student_cohort$C_home_school_name <- student_cohort$D_location_name[match(student_cohort$C_home_school_code, student_cohort$D_location_id)]
+
+```
+
+### 2.5 Define the final cohort group
+
+-   **What:** Using the two flags you created, define the final cohort group by excluding students who were not included in either the duration or progression flags
+
+-   **Check:** Check that the number of students in the final cohort group is consistent with the number of students in the progression and duration flags
+
+-   **Project Team Action:** Gut check/track. This will be your final analysis group moving forward.
+
+```{r}
+#count the number of students in the final cohort group using both flags
+final_cohort_count <- student_cohort %>% 
+  filter(duration == "include" & H_stu_cohort == "include") %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print() 
+
+
+#count the number of students in the final cohort group by home school
+final_cohort_count %>% 
+  group_by(C_home_school_code) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print() %>% 
+  ungroup()
+
+
+
+```
+
+
+
+### 2.6 Investigate random student ids
+
+-   **What:** Checking random student ids to make sure include/exclude flags worked
+
+-   **Check:** Excluded students should be excluded. Also helpful to filter to all your included students in your data frame and scroll through to make sure the code worked as expected
+
+-   **Project Team Action:** Gut check to make sure all of the flags worked as necessary
+
+```{r}
+## Code for checking random IDs
+# Get unique student IDs
+unique_student_ids <- unique(student_cohort$D_stu_id)
+
+# Select a random student ID
+random_student_id1 <- sample(unique_student_ids, 1)
+random_student_id2 <- sample(unique_student_ids, 1)
+random_student_id3 <- sample(unique_student_ids, 1)
+random_student_id4 <- sample(unique_student_ids, 1)
+
+
+## Deep dive into a few random student ids
+student_dive10 <- student_cohort %>%
+  filter(D_stu_id == random_student_id1) %>%
+  arrange(D_year)
+
+student_dive11 <- student_cohort %>%
+  filter(D_stu_id == random_student_id2) %>%
+  arrange(D_year)
+
+student_dive12 <- student_cohort %>%
+  filter(D_stu_id == random_student_id3) %>%
+  arrange(D_year)
+
+student_dive13 <- student_cohort %>%
+  filter(D_stu_id == random_student_id4) %>%
+  arrange(D_year)
+
+```
+
+
+### 2.7 Excluded students checks
+
+-   **What:** Checks the number of students who are included/excluded based on progression and duration by year to have a better confidence and understanding in the data
+
+-   **Check:** Code block should run without error
+
+-   **Project Team Action:** Gut check/track
+
+
+```{r}
+# This is an extra set of checks to look through students to better understand when they were "excluded" 
+
+#2020
+students_included_2020 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" & H_duration_9th == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2020)
+
+#2021
+students_included_2021 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" &
+           H_10th_gr_SY2021 == "Y" &
+           H_duration_9th == "Y" &
+           H_duration_10th == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2021)
+
+#2022
+students_included_2021 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" &
+           H_10th_gr_SY2021 == "Y" &
+           H_11th_gr_SY2022 == "Y" &
+           H_duration_9th == "Y" &
+           H_duration_10th == "Y" &
+           H_duration_11th == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2021)
+
+#2023
+students_included_2021 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" &
+           H_10th_gr_SY2021 == "Y" &
+           H_11th_gr_SY2022 == "Y" &
+           H_12th_gr_SY2023 == "Y" &
+           H_duration_9th == "Y" &
+           H_duration_10th == "Y" &
+           H_duration_11th == "Y" &
+           H_duration_12th == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2021)
+
+#and you would expect this number to match your total number of students in the cohort
+
+# Check just by persistence
+
+#2020
+students_included_2020 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2020)
+
+#2021
+students_included_2021 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" & H_10th_gr_SY2021 == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2021)
+
+#2022
+students_included_2022 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" & H_10th_gr_SY2021 == "Y" & H_11th_gr_SY2022 == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2022)
+
+#2023
+students_included_2023 <- student_cohort %>%
+  filter(H_9th_gr_SY2020 == "Y" & H_10th_gr_SY2021 == "Y" & H_11th_gr_SY2022 == "Y" & H_12th_gr_SY2023 == "Y") %>%
+  summarise(count_students = n_distinct(D_stu_id))
+print(students_included_2023)
+
+```
+
+
+# Part III: Create transcript data frame
+
+## 3.1 Merge Transcript and Student Cohort Data Frames
+
+### a. Create Unique Data Frame
+
+-   **What:** Creates a new data-frame of just cohort students (students who meet both the duration and progression critera) to match with transcript data, with one row per student per year
+
+-   **Check:** Code block should run without error
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#flag students who transferred
+student_cohort <- student_cohort %>%
+  group_by(D_stu_id) %>%
+  mutate(C_stu_multiple_locations = if_else(
+    n_distinct(D_location_id) > 1,
+    "Y", 
+    "N"
+  )) %>% 
+  ungroup()
+
+
+#create unique student data frame
+student_cohort_unique <- student_cohort %>% 
+  select(D_stu_id, 
+         D_year,
+         D_stu_race, 
+         D_stu_swd,
+         D_stu_frl,
+         C_eoy_grade,
+         C_home_school_code,
+         C_home_school_name,
+         H_stay_duration_home_school,
+         C_stu_multiple_locations,
+         H_10th_gr_SY2021,
+         H_11th_gr_SY2022,
+         H_12th_gr_SY2023,
+         C_9th_gr_SY2019,
+         H_stu_cohort,
+         duration
+         ) %>% 
+  distinct(D_stu_id, D_year, .keep_all = TRUE)
+
+#counts
+student_cohort_unique %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+student_cohort_unique %>% 
+  filter(H_stu_cohort == "include", duration == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+
+#check each student has one row per year
+student_cohort_unique %>%
+  group_by(D_stu_id, D_year) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>% 
+  ungroup() %>% 
+  print()
+
+#count by year
+student_cohort_unique %>%
+  filter(H_stu_cohort == "include", duration == "include") %>% 
+  group_by(D_year) %>%
+  summarise(count_students = n_distinct(D_stu_id)) %>%
+  arrange(desc(count_students)) %>% 
+  ungroup() %>% 
+  print()
+```
+
+### b. Return & remove mismatched student ids 
+
+-   **What:** Return & remove student ids that exist in cohort file but not transcript file, and vice versa; this will make merging easier later on
+
+-   **Check:** Number of rows at end is as expected
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+
+#get the IDs that are in the student cohort file but not in the transcript file
+stu_ids_missing <- setdiff(student_cohort_unique$D_stu_id, transcript_roll_up$D_stu_id) %>% print()
+
+#are these students we included in cohort
+included_students <- student_cohort_unique %>%
+  filter(D_stu_id %in% stu_ids_missing & C_stu_cohort == "include") %>%
+  pull(D_stu_id) %>% 
+  print()
+
+#change these students to exclude 
+student_cohort_unique <- student_cohort_unique %>%
+  mutate(
+   C_stu_cohort = ifelse(D_stu_id %in% included_students, "exclude", C_stu_cohort)
+  )
+
+#student_cohort <- student_cohort %>%
+  mutate(
+    C_stu_cohort = ifelse(D_stu_id %in% included_students, "exclude", C_stu_cohort)
+  )
+
+#check new counts
+student_cohort_unique %>% 
+  filter(C_stu_snapshot == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+  
+student_cohort %>% 
+  filter(C_stu_cohort == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+```
+
+### c. Return & remove mismatched student ids
+
+-   **What:** Return & remove student ids that exist in transcript file but not student cohort file
+
+-   **Check:** Number of rows at end is as expected
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+
+#Before we start, lets make sure we have the same number of distinct include cohort students from the student file
+student_cohort_unique %>% 
+  filter(H_stu_cohort == "include", duration == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+stu_ids_extra <- setdiff(transcript_roll_up$D_stu_id, student_cohort_unique$D_stu_id) %>% print()
+
+
+#count before
+transcript_roll_up %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#okay, it would make sense that we have a lot of different IDs between the two files, we need to select just the students who are to be included in the cohort from the transcript file
+
+#remove rows with these student IDs from transcript roll-up
+transcript_cohort <- transcript_roll_up %>%
+    filter(!D_stu_id %in% stu_ids_extra)
+
+#compare distinct counts to make sure removed correct set of student ids
+transcript_cohort %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#All good up to this point
+
+stu_ids_check <- setdiff(transcript_cohort$D_stu_id, student_cohort_unique$D_stu_id) %>% 
+  print()
+
+#should be zero, thats good
+
+stu_ids_check_2 <- setdiff(student_cohort_unique$D_stu_id, transcript_cohort$D_stu_id) %>% 
+  print()
+
+#also zero, thats good
+
+#need to check for mismatching student ids by year though
+#perform set differences for each year and print the results
+#years <- c(2019, 2020, 2021, 2022, 2023)
+
+#stu_ids_check_list <- map(years, ~ {
+  #setdiff(transcript_cohort %>% filter(D_year == .x) %>% pull(D_stu_id), #printing out student ids present in transcript_cohort and not student_cohort_unique for each year
+          #student_cohort_unique %>% filter(D_year == .x) %>% pull(D_stu_id)) %>% 
+    #print()
+#})
+
+#want to return student ids that are present in student cohort, but not transcript data by year
+#filtered_student_cohort <- student_cohort %>% 
+  #filter(H_stu_cohort == "include") %>% 
+  #print()
+
+#stu_ids_check_list_2 <- map(years, ~ {
+  #setdiff(filtered_student_cohort %>% filter(D_year == .x) %>% pull(D_stu_id),
+          #transcript_cohort %>% filter(D_year == .x) %>% pull(D_stu_id)) %>% 
+    #print()
+#})
+
+#remove these students from data frames
+#transcript_cohort <- transcript_cohort %>%
+  #filter(!D_stu_id %in% unlist(stu_ids_check_list))
+
+#new count
+#transcript_cohort %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #print()
+
+#student_cohort <- student_cohort %>%
+  #filter(!D_stu_id %in% unlist(stu_ids_check_list_2))
+
+#student_cohort_unique <- student_cohort_unique %>%
+  #filter(!D_stu_id %in% unlist(stu_ids_check_list_2))
+
+#new counts
+#student_cohort_unique %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #print()
+
+#student_cohort_unique %>% 
+  #filter(H_stu_cohort == "include") %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #print()
+
+#student_cohort_unique %>% 
+  #filter(C_stu_cohort == "include") %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #print()
+```
+
+### d. Merge
+
+-   **What:** Create new merged data frame
+
+-   **Check:** Check distinct counts
+
+-   **Project Team Action:** Update Cohort Checks table
+
+```{r}
+#06/05
+#SE I actually just jumped down here because I think that might be all I need? Let's find out
+
+
+#merge
+merged_transcript_cohort <- left_join(transcript_cohort, student_cohort_unique, by = c("D_stu_id", "D_year"))
+
+#count number of students
+merged_transcript_cohort %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#count number of included students
+merged_transcript_cohort %>% 
+  group_by(D_year) %>% 
+  filter(H_stu_cohort == "include", duration == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#Okay, lets filter the merged_transcript_cohort data-frame to just students who are included for duration and H_stu_cohort
+merged_transcript_cohort <- merged_transcript_cohort %>%
+  filter(H_stu_cohort == "include", duration == "include")
+
+#skimming it looks good, lets do a check of percentages of missing data that we have
+#create new data frame with column information
+col_info <-  data.frame(
+  Column_Name = names(merged_transcript_cohort),
+  Data_Type = sapply(merged_transcript_cohort, class),
+  Count_Rows = sapply(merged_transcript_cohort, function(x) length(na.omit(x))),
+  NA_Rows = sapply(merged_transcript_cohort, function(x) sum(is.na(x))),
+  Unique_Rows = sapply(merged_transcript_cohort, function(x) length(unique(na.omit(x)))),
+  Zero_Rows = sapply(merged_transcript_cohort, function(x) sum(x == 0)),
+  stringsAsFactors = FALSE,
+  row.names= NULL
+)
+
+#calc % missing
+col_info <- col_info %>%
+            mutate(Percent_Missing = NA_Rows / Count_Rows * 100)
+
+#print new data frame
+print(col_info)
+
+
+#cat(names(merged_transcript_cohort), sep = ", ")
+
+# merged_transcript_cohort <- merged_transcript_cohort %>% 
+#   select(D_stu_id, 
+#          D_course_id, 
+#          D_course_name, 
+#          D_grade, 
+#          D_year, 
+#          D_term, 
+#          D_stu_grade,
+#          D_stu_race, 
+#          C_stu_frl, 
+#          C_stu_ell, 
+#          C_stu_swd, 
+#          H_stu_cohort,
+#          H_10th_gr_SY2021,
+#          H_11th_gr_SY2022,
+#          H_12th_gr_SY2023,
+#          C_9th_gr_SY2019,
+#          C_stu_cohort, 
+#          C_stu_multiple_locations, 
+#          C_eoy_grade, 
+#          H_stay_duration_home_school, 
+#          C_stu_summer_school_flag,
+#          D_creds_earn, 
+#          D_creds_possible, 
+#          D_course_section, 
+#          D_gpa_points, 
+#          D_gpa_level, 
+#          D_gpa_count, 
+#          D_gpa_scale, 
+#          D_location_id, 
+#          D_location_name,
+#          C_home_school_name,
+#          C_home_school_code,
+#          C_school_exclude_flag, 
+#          C_concatenated_fields, 
+#          C_subject_area, 
+#          C_subject, 
+#          C_rigor, 
+#          C_international_scholars_flag, 
+#          C_ib_flag, C_preap_ap_flag, 
+#          C_world_language_flag, 
+#          D_cte_flag, 
+#          C_dual_credit_flag, 
+#          D_course_duration, 
+#          D_course_counse_app_req, 
+#          D_course_start_grade, 
+#          D_course_end_grade, 
+#          D_course_avg_num_stu, 
+#          D_cte_hrs, 
+#          C_pathway_flag, 
+#          C_automotive_flag, 
+#          C_programing_and_software_dev_flag, 
+#          C_pltw_engineering_flag, 
+#          C_cybersecurity_flag, 
+#          C_engineering_flag, 
+#          C_biomedical_flag, 
+#          C_adv_manufacturing_and_machinery_mechanics_flag, 
+#          C_welding_flag, 
+#          C_emergency_services_flag, 
+#          C_law_enforcement_flag, 
+#          C_legal_studies_flag, 
+#          C_networking_systems_flag, 
+#          C_info_tech_support_and_services_flag, 
+#          C_cosmetology_flag, 
+#          C_family_and_community_serv_flag, 
+#          C_culinary_arts_flag, 
+#          C_healthcare_therapeutic_flag, 
+#          C_nursing_sci_flag, 
+#          C_edu_and_training_flag, 
+#          C_business_mgmt_flag, 
+#          C_marketing_and_sales_flag, 
+#          C_accounting_and_fin_serv, 
+#          C_digital_comms_flag, 
+#          C_graphic_design_and_media_arts_flag, 
+#          C_animal_sci_flag, 
+#          C_plant_sci_floral_flag, 
+#          C_plant_sci_prod_flag, 
+#          C_enviro_and_nat_resources_flag, 
+#          C_food_sci_and_tech_flag, 
+#          C_arch_design_flag, 
+#          C_hvac_flag, 
+#          C_carpentry_flag, 
+#          C_electrical_flag, 
+#          C_plumbing_flag, 
+#          C_agr_food_and_nat_resources_cluster_flag, 
+#          C_architecture_construction_cluster_flag, 
+#          C_arts_audio_video_comms_cluster_flag, 
+#          C_bus_mrk_finance_cluster_flag, 
+#          C_edu_training_cluster_flag, 
+#          C_health_sci_cluster_flag, 
+#          C_hospitality_tourism_cluster_flag, 
+#          C_human_serv_cluster_flag, 
+#          C_info_tech_cluster_flag, 
+#          C_law_public_serv_cluster_flag, 
+#          C_manu_cluster_flag, 
+#          C_stem_cluster_flag, 
+#          C_automotive_cluster_flag, 
+#          C_pathway_course_level,
+#          C_multiple_pathways_flag, 
+#          C_multiple_clusters_flag
+#   )
+
+#count number of students
+merged_transcript_cohort %>% 
+  group_by(D_year) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#counts by year
+merged_transcript_cohort %>% 
+  filter(H_stu_cohort == "include") %>% 
+  group_by(D_year) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+```
+
+
+
+# Part IV: Export files and tables
+
+-   **What:** The below exports all your check tables to an excel file in the folder path you set above
+
+-   **Check:** Look at your data in the environment after running the code block below and be sure that all your variables have the follow the standard naming convention (D tag, lower case, underscores)
+
+-   **Project Action:** Optional - change the file name
+
+```{r}
+# Get today's date
+current_date <- format(Sys.Date(), "%m.%d.%y") # will update with the date it was last run
+
+# Save student cohort file for next phase
+#write.xlsx(student_cohort,
+          #file = paste0(full_file_path,
+                        #"Validated data/3_student_cohort_", current_date, ".xlsx"))
+
+# Save transcript cohort file for next phase
+#write.xlsx(transcript_cohort,
+          #file = paste0(full_file_path,
+                       # "Validated data/3_transcript_cohort_", current_date, ".xlsx"))
+
+# Save merged files for next phase
+write.xlsx(merged_transcript_cohort,
+          file = paste0(full_file_path,
+                        "/3_merged_transcript_cohort_", current_date, ".xlsx"))
+
+```

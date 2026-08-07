@@ -1,0 +1,998 @@
+---
+title: "3_cohort_pathways_tables-IPS"
+date: "April 10 2024"
+author: Rebel Todhunter
+output: html_document
+  toc: yes
+  df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Part I: Setup
+
+This part of the script allows you to:
+
+-   Load the functions that R will be using to work with your data (Excel automatically loads all its functions - if, countif, index, match, etc. - when you open it, but R requires manual loading of functions if you want full access to what it offers)
+
+-   Specify the Sharepoint folder where your raw data lives so R can pull it in
+
+-   Actually load in the raw data you'll be working with throughout the rest of the script
+
+## 1.1 Load Packages
+
+-   **What:** This code block loads in all relevant function packages (a.k.a. R functions you'll be needing in this script). Note that if you haven't installed the packages into your computer yet, R will print an error and you'll need to install them first by running install.packages(tidyverse) and install.packages(formattable), etc.
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r, warning = F, message = F}
+library(tidyverse)
+library(data.table)
+library(dplyr)
+library(formattable)
+library(data.table)
+library(here)
+library(flextable)
+library(openxlsx)
+library(readxl)
+library(lubridate)
+library(safejoin)
+library(ggplot2)
+```
+
+## 1.2 Declare Variables
+
+-   **What:** This code block establishes a variable for code-users to define a consistent file path for loading data
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+### a. User Name
+
+```{r, warning = F, message = F}
+#action: add your user name in the file path. Add more user names for more team members
+user_name_team_member1 <- "C:/Users/rtodhunter"
+user_name_team_member2 <- "C:/Users/mampie"
+user_name_team_member3 <- "C:/Users/lbliss"
+```
+
+### b. File Path
+
+-   **What:** This code block creates a condensed file-path to the locally synced versions of your demographic data from sharepoint. You will have to edit to make it user/project specific.
+
+-   **Check:** No error message coming out of code block
+
+-   **Note:** File paths in R always use "/" instead of "", so you might need to manually change the direction of your slashes when you copy your folder path from Share point
+
+-   **Project Team Action:** Change the code below based on where your file is located. More specifically - find your path to the data by navigating to your folder in file explorer and then copying the path at the top of your file explorer. This path might be different for each team member depending on which folders they have synced to their One Drive
+
+```{r, warning = F, message = F}
+folder_path_team_member1 <- "/Education Resource Strategies/Org-Wide Files - Raw Data/"
+folder_path_team_member2 <- "/Education Resource Strategies/Org-Wide Files - Raw Data/"
+folder_path_team_member3 <- "/Education Resource Strategies/Org-wide Files - HS Diagnostic/"
+```
+
+### c. Full Folder Path
+
+-   **What:** This code block combines the variables you created in the two previous steps to create one continuous file path to your data.
+
+-   **Check:** No error message coming out of code block, file path should match folder destination locally
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r, warning = F, message = F}
+#action: update the numbers at the end of the variables with your user number. E.g. if you are number 2, then change the number to 2 at the end of user_name_team_member and folder_path_team_member
+user_name <- user_name_team_member3
+folder_path <- folder_path_team_member3
+
+#action: leave unchanged (this combines your values above into a single file path)
+full_file_path <- paste0(user_name, folder_path)
+
+#check
+print(full_file_path)
+```
+
+### d. File Names
+
+-   **What:** This code block creates condensed versions of files names for ease of upload and analysis. You should update the code based on the specific names of your demographic files
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Update with specific file names
+
+-   **RT Methodological Note:** Lubbock sent three sets of student files, so need to upload all. This will not be the case for most districts
+
+```{r, warning = F, message = F}
+#update to your file name
+#note that your data should be in CSV format and that your file name should always end with .csv
+
+#transcript
+merged_transcript_cohort_path <- "Validated data/Final data/3_merged_transcript_cohort_06.02.24.xlsx"
+```
+
+## 1.3 Load Data
+
+**What:** Now that R knows how to access the folder path, it's time to load in your raw data
+
+**Check:** The code block should print the names of all data files you need
+
+**Project Team Action:** None
+
+```{r}
+# Check path
+print(paste0(full_file_path, merged_transcript_cohort_path))
+
+# Reading in merged transcript cohort path 
+## Noting that I did not need either of the other files, so I have removed that code 
+merged_transcript_cohort <- read.xlsx(paste0(full_file_path, merged_transcript_cohort_path))
+
+
+```
+
+# Part II: Cohort Pathways Table
+```{r}
+## Creating new variables 
+
+### Create new variables around failures of important courses 
+# Create H_fail_alg_1
+alg_1_course_ids <- c("2516", "2520")
+# Create in merged_cohort  
+merged_transcript_cohort <- merged_transcript_cohort %>%
+  group_by(D_stu_id) %>%
+  mutate(H_fail_alg_1 = case_when(
+    any(C_state_course_id %in% alg_1_course_ids & D_stu_grade == "F") ~ "Y",
+    any(C_state_course_id %in% alg_1_course_ids & D_stu_grade != "F") ~ "N",
+    TRUE ~ NA_character_
+  )) %>%
+  ungroup()
+
+# Create H_fail_ela_1
+ela_1_course_ids <- c("1002")
+# Create in merged_cohort
+merged_transcript_cohort <- merged_transcript_cohort %>%
+  group_by(D_stu_id) %>%
+  mutate(H_fail_ela_1 = case_when(
+    any(C_state_course_id %in% ela_1_course_ids & D_stu_grade == "F") ~ "Y",
+    any(C_state_course_id %in% ela_1_course_ids & D_stu_grade != "F") ~ "N",
+    TRUE ~ NA_character_
+  )) %>%
+  ungroup()
+```
+
+## 2.1 Create new data frame
+
+```{r}
+## Adding as a validation variable essentially 
+# Creating a variable that sums the total credits enrolled for each student in all courses
+merged_transcript_cohort <- merged_transcript_cohort %>% 
+  group_by(D_stu_id) %>% 
+  mutate(H_total_creds_enrolled_all = sum(as.numeric(D_creds_possible), na.rm = TRUE)) %>% 
+  ungroup()
+
+# Table with the count of credits possible 
+merged_transcript_cohort %>%
+  filter(C_cohort_final == "include") %>%
+  group_by(H_total_creds_enrolled_all) %>%
+  summarise(count_of_student_IDs = n_distinct(D_stu_id))
+
+## Would expect to see very few below the minimum graduation threshold 
+## 14 * 4 = 56
+
+# Reviewing our cohort 
+merged_transcript_cohort %>%
+  group_by(C_cohort_final) %>%
+  summarise(count_of_student_IDs = n_distinct(D_stu_id)) ## The include flag is what we want to go by here 
+
+# Now count the distinct students that have a value of C_pathway == "Y" and group by C_cohort_final
+merged_transcript_cohort %>%
+  filter(C_pathway == "Y") %>%
+  group_by(C_cohort_final) %>%
+  summarise(count_of_student_IDs = n_distinct(D_stu_id)) ## The include flag is what we want to go by here 
+
+## Now, we are going to remove courses that are not pathways courses 
+
+# Filter to just pathways courses (same as we did for the snapshot pathways table)
+merged_transcript_cohort_filtered <- merged_transcript_cohort %>% 
+  filter(C_pathway == "Y")
+
+# Now count again 
+merged_transcript_cohort_filtered %>%
+  group_by(C_pathway) %>%
+  summarise(count_of_student_IDs = n_distinct(D_stu_id)) ## The include flag is what we want to go by here
+
+## Count of student IDs that have that have taken a pathways course (of those that we are including in our cohort)
+merged_transcript_cohort_filtered %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_pathway) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+# Renaming credits possible to be credits enrolled
+merged_transcript_cohort_filtered <- merged_transcript_cohort_filtered %>% 
+  rename(D_creds_enrolled = D_creds_possible)
+
+# Creating a variable that sums the total credits enrolled for each student (this is specifically pathways credits)
+merged_transcript_cohort_filtered <- merged_transcript_cohort_filtered %>% 
+  group_by(D_stu_id) %>% 
+  mutate(H_total_creds_enrolled = sum(as.numeric(D_creds_enrolled), na.rm = TRUE)) %>% 
+  ungroup()
+
+# Table with the count of pathways credits possible 
+merged_transcript_cohort_filtered %>%
+  filter(C_cohort_final == "include") %>%
+  group_by(H_total_creds_enrolled) %>%
+  summarise(count_of_student_IDs = n_distinct(D_stu_id))
+
+# Count of distinct student IDs in merged_transcript_cohort_filtered
+merged_transcript_cohort_filtered %>%
+  summarise(count_of_student_IDs = n_distinct(D_stu_id))
+```
+
+
+```{r}
+cohort_pathways_table <- merged_transcript_cohort_filtered %>% 
+  select(
+    # General 
+    D_year,
+    D_term,
+    # Student info
+    D_stu_id, 
+    C_home_school_code, 
+    C_home_school_name, 
+    C_eoy_grade, 
+    D_stu_race, 
+    C_stu_ell, 
+    C_stu_multiple_locations,
+    H_total_creds_enrolled,
+     H_fail_alg_1,
+     H_fail_ela_1,
+    # Course info
+    D_course_id,
+    C_state_course_id,
+    D_course_name,
+    D_stu_grade, 
+    D_course_level,
+    D_creds_earn,
+    D_creds_enrolled,
+    # Pathways coding
+    C_info_and_tech,
+    C_radio_and_tv,
+    D_animal_sciences,
+    D_automotive_services,
+    D_automation_and_robotics,
+    D_banking_and_investment, 
+    D_biomedical_sciences,
+    D_business_admin,
+    D_central_services_tech,
+    D_communications,
+    D_computer_science,  
+    D_construction_trades,
+    D_cosmetology,
+    D_culinary_arts,
+    D_digital_design_all,
+    D_early_child_ed,
+    D_education_professions,
+    D_engineering,
+    D_finance_and_investment,
+    D_fire_and_rescue,
+    D_healthcare_specialist,
+    D_hospitality_management,
+    D_marketing_and_sales,
+    D_medical_assistant,
+    D_natural_resources,
+    D_networking,
+    D_software_dev,
+    D_welding, 
+    C_multiple_cats, 
+   # Cohort
+    C_cohort_final,
+  )
+ 
+#pivot longer
+cohort_pathways_table <- cohort_pathways_table %>%
+  pivot_longer(cols = c(C_info_and_tech,
+    C_radio_and_tv,
+    D_animal_sciences,
+    D_automotive_services,
+    D_automation_and_robotics,
+    D_banking_and_investment, 
+    D_biomedical_sciences,
+    D_business_admin,
+    D_central_services_tech,
+    D_communications,
+    D_computer_science,  
+    D_construction_trades,
+    D_cosmetology,
+    D_culinary_arts,
+    D_digital_design_all,
+    D_early_child_ed,
+    D_education_professions,
+    D_engineering,
+    D_finance_and_investment,
+    D_fire_and_rescue,
+    D_healthcare_specialist,
+    D_hospitality_management,
+    D_marketing_and_sales,
+    D_medical_assistant,
+    D_natural_resources,
+    D_networking,
+    D_software_dev,
+    D_welding), 
+               names_to = "C_pathway", 
+               values_to = "C_pathway_Y_or_N") #Y flag represents courses that are pathway courses - so essentially a student seat in a pathway
+
+#check counts
+cohort_pathways_table %>% 
+  group_by(C_pathway_Y_or_N) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+cohort_pathways_table %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(C_pathway_Y_or_N) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#compare counts to before data transformation
+merged_transcript_cohort_filtered %>% 
+  group_by(C_pathway) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+merged_transcript_cohort_filtered %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(C_pathway) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#convert Y to 1 and N to 0 because they are easier to deal with
+cohort_pathways_table <- cohort_pathways_table %>%
+  mutate(C_pathway_Y_or_N = ifelse(C_pathway_Y_or_N == "Y", "1", "0"))
+
+#check counts
+cohort_pathways_table %>% 
+  group_by(C_pathway_Y_or_N) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#change data type
+cohort_pathways_table <- cohort_pathways_table %>%
+  mutate(C_pathway_Y_or_N = as.numeric(C_pathway_Y_or_N))
+
+#remove all Ns because during data transformation, a row for every course id and pathway was created, most of which introduced N values as most course ids do not belong to each pathway
+cohort_pathways_table <- cohort_pathways_table %>% 
+  filter(C_pathway_Y_or_N == "1")
+  
+#count number of students with "1"
+cohort_pathways_table %>% 
+  group_by(C_pathway_Y_or_N) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+```
+
+## 2.2 Merge in pathway info
+#### LB removed this code because I did not need to do anything here 
+
+## 2.3 Flagging CTE Statuses
+
+### a. Prep to Code CTE Statuses
+
+Coding criteria:
+  -   CTE Participant -  A student completing EITHER: Only one CTE course for any number of credits; OR More than one course for less than two credits (the student does not have to pass or receive credit).
+  -   CTE Explorer - A student completing two or more high school CTE courses for a total of two or more credits and not a participant, concentrator or completer (the student does not have to pass or receive credit). 
+  -   CTE Concentrator - A student completing and passing two or more CTE courses for a total of at least two credits within the same program of study and not a completer.
+  -   CTE Completer - A student completing and passing three or more CTE courses for a total of four or more credits within a program of study, including one level three or level four course from within the same program of study. 
+  
+```{r}
+#convert course level to numeric but selecting only the last character (which is the number)
+cohort_pathways_table <- cohort_pathways_table %>%
+  mutate(C_pathway_course_level = case_when(
+    D_course_level == "Principles" ~ 1,
+    D_course_level == "Concentrator A" | D_course_level == "Concentrator B" | D_course_level == "Tech Skills" | D_course_level == "Tech skills"~ 2,
+    D_course_level == "Capstone" ~ 3)
+  )
+
+
+## Creating new variables 
+cohort_pathways_table <- cohort_pathways_table %>%
+  group_by(D_stu_id, C_pathway, D_course_id) %>% 
+  mutate(
+    H_passed_full_pathway_course = if_else(
+      (any(D_term == "S1") & any(D_creds_earn >= 1 & D_term == "S1")) &
+      (any(D_term == "S2") & any(D_creds_earn >= 1 & D_term == "S2")), 
+      1, 
+      if_else(
+        n_distinct(D_term) == 1 & any(D_creds_earn >= 1), 
+        1, 
+        0
+      )
+    )
+  ) %>%
+  ungroup() %>% 
+  mutate(H_pathway_course_level_passed = if_else(H_passed_full_pathway_course == 1, C_pathway_course_level, 0)) %>%
+  ungroup() %>% 
+  group_by(D_stu_id, C_pathway) %>% 
+  mutate(H_max_course_level_passed = max(H_pathway_course_level_passed, na.rm = TRUE)) %>% 
+  mutate(H_total_creds_earn = sum(as.numeric(D_creds_earn), na.rm = TRUE)) %>%
+  ungroup() %>% 
+  group_by(D_stu_id) %>% 
+  mutate(H_max_creds_earn = max(H_total_creds_earn)) %>% 
+  ungroup()
+
+# Select a random student ID from the column 'D_stu_id'
+random_student_id1 <- sample(cohort_pathways_table$D_stu_id, 1)
+random_student_id2 <- sample(cohort_pathways_table$D_stu_id, 1)
+random_student_id3 <- sample(cohort_pathways_table$D_stu_id, 1)
+
+
+#check student ids
+student_dive <- cohort_pathways_table %>% 
+  filter(D_stu_id == random_student_id1) %>% 
+  select(D_stu_id, D_course_name, D_term, D_creds_earn, D_course_level, C_pathway, H_passed_full_pathway_course, H_pathway_course_level_passed, H_max_course_level_passed)
+
+student_dive_2 <- cohort_pathways_table %>% 
+  filter(D_stu_id == random_student_id2) %>% 
+  select(D_stu_id, D_course_name, D_year, D_term, D_creds_earn, D_course_level, C_pathway, H_passed_full_pathway_course, H_pathway_course_level_passed, H_max_course_level_passed)
+
+student_dive_3 <- cohort_pathways_table %>% 
+  filter(D_stu_id == random_student_id3) %>% 
+  select(D_stu_id, D_course_name, D_term, D_creds_earn, C_pathway, H_passed_full_pathway_course, H_total_creds_earn)
+```
+
+### b. Code CTE Statuses
+
+```{r}
+#flag pathway statuses
+ cohort_pathways_table <- cohort_pathways_table %>% 
+   mutate(C_pathway_status = case_when(
+     H_total_creds_earn >= 8 ~ "completer",
+     H_total_creds_earn >= 4 ~ "concentrator",
+     H_total_creds_enrolled >= 4 ~ "explorer",
+     H_total_creds_enrolled > 0 ~ "participant",
+     TRUE ~ NA_character_
+   ))
+
+# # Removed the requirement to have passed a capstone; should check with RK on this
+# 
+# #flag pathway statuses
+# cohort_pathways_table <- cohort_pathways_table %>% 
+#   mutate(C_pathway_status = case_when(
+#     H_total_creds_earn >= 8 ~ "completer",
+#     H_total_creds_earn >= 4 ~ "concentrator",
+#     H_total_creds_enrolled >= 4 ~ "explorer",
+#     H_total_creds_enrolled > 0 ~ "participant",
+#     TRUE ~ NA_character_
+#   ))
+
+#return min and max creds earn by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(min_creds_earn = min(H_total_creds_earn),
+            max_creds_earn = max(H_total_creds_earn)) %>%
+  ungroup()
+
+#return min and max creds enrolled by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(min_creds_enrolled = min(H_total_creds_enrolled),
+            max_creds_enrolled = max(H_total_creds_enrolled)) %>%
+  ungroup()
+
+random_student_id1 <- sample(cohort_pathways_table$D_stu_id, 1)
+
+#check student
+student_dive_5 <- cohort_pathways_table %>% 
+  filter(D_stu_id == random_student_id1) %>% 
+  select(D_stu_id, D_course_name, D_term, D_year, D_creds_earn, C_pathway, H_total_creds_earn, H_total_creds_enrolled, C_pathway_status)
+
+#counts
+cohort_pathways_table %>% 
+  group_by(C_pathway_status) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  ungroup()
+ 
+#if a student is a completer, do not code them as a concentrator, explorer, or participant for any pathway
+#if a student is a concentrator, do not code them as an explorer, or participant for any pathway
+#if a student is an explorer, do not code them as a participant for any pathway
+cohort_pathways_table <- cohort_pathways_table %>% 
+  group_by(D_stu_id) %>% 
+  mutate(C_pathway_status_roll_up = case_when(
+    any(C_pathway_status == "completer") ~ "completer",
+    any(C_pathway_status == "concentrator") ~ "concentrator",
+    any(C_pathway_status == "explorer") ~ "explorer",
+    any(C_pathway_status == "participant") ~ "participant",
+    TRUE ~ NA_character_
+  )) %>% 
+  ungroup()
+
+#return min and max creds earn by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(min_creds_earn = min(H_total_creds_earn),
+            max_creds_earn = max(H_total_creds_earn)) %>%
+  ungroup()
+
+#return min and max creds enrolled by pathway status
+cohort_pathways_table %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(min_creds_enrolled = min(H_total_creds_enrolled),
+            max_creds_enrolled = max(H_total_creds_enrolled)) %>%
+  ungroup()
+
+
+random_student_id1 <- sample(cohort_pathways_table$D_stu_id, 1)
+
+#check student
+student_dive_6 <- cohort_pathways_table %>% 
+  filter(D_stu_id == random_student_id1)
+
+#counts
+cohort_pathways_table %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+cohort_pathways_table %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(C_pathway_status_roll_up) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+```
+
+### c. Students who completed multiple pathways
+
+```{r}
+cohort_pathways_table %>% 
+  group_by(D_stu_id) %>% 
+  filter(C_cohort_final == "include" & H_total_creds_earn >= 8) %>% # took out requirement for course level
+  summarize(count_pathways = n_distinct(C_pathway)) %>% 
+  arrange(desc(count_pathways))
+
+cohort_pathways_table %>% 
+  filter(C_cohort_final == "include" & C_pathway_status == "completer") %>% 
+  group_by(C_pathway) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  arrange(desc(count_students)) %>%
+  ungroup()
+
+cohort_pathways_table %>% 
+  filter(C_cohort_final == "include" & C_pathway_status == "completer") %>% 
+  group_by(C_pathway) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  ungroup() %>% 
+  pull(count_students) %>% 
+  sum()
+```
+
+# Part III: Cohort Analyses
+
+**RT NOTE:** I did analyses that required more processing in R, and the rest in excel
+
+## 3.0 Better understand 9th grade retention / transiency
+
+```{r}
+student_cohort %>% 
+  filter(C_cohort_final == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+student_cohort %>% 
+  group_by(C_stu_multiple_locations) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>%
+  ungroup()
+
+student_cohort %>% 
+  filter(C_cohort_final == "exclude") %>% 
+  summarize(count_students = n_distinct(D_stu_id))
+
+student_cohort %>% 
+  filter(C_cohort_final == "exclude") %>% 
+  group_by(D_stu_exit_code_desc) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+student_cohort %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(D_stu_exit_code_desc) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+## 3.1 9th grade performance and pathway enrollment
+
+```{r}
+#new data frame that will be easier to work with
+merged_transcript_cohort_analysis <- merged_transcript_cohort %>%
+  select(-C_automotive_flag,
+         -C_programming_and_software_dev_flag, 
+         -C_pltw_engineering_flag, 
+         -C_cybersecurity_flag, 
+         -C_engineering_flag, 
+         -C_biomedical_flag, 
+         -C_adv_manufacturing_and_machinery_mechanics_flag, 
+         -C_welding_flag, 
+         -C_emergency_services_flag, 
+         -C_law_enforcement_flag, 
+         -C_legal_studies_flag, 
+         -C_networking_systems_flag, 
+         -C_info_tech_support_and_services_flag, 
+         -C_cosmetology_flag, 
+         -C_family_and_community_serv_flag, 
+         -C_culinary_arts_flag, 
+         -C_healthcare_therapeutic_flag, 
+         -C_nursing_sci_flag, 
+         -C_edu_and_training_flag, 
+         -C_business_mgmt_flag, 
+         -C_marketing_and_sales_flag, 
+         -C_accounting_and_fin_serv, 
+         -C_digital_comms_flag, 
+         -C_graphic_design_and_media_arts_flag, 
+         -C_animal_sci_flag, 
+         -C_plant_sci_floral_flag, 
+         -C_plant_sci_prod_flag, 
+         -C_enviro_and_nat_resources_flag, 
+         -C_food_sci_and_tech_flag, 
+         -C_arch_design_flag, 
+         -C_hvac_flag, 
+         -C_carpentry_flag, 
+         -C_electrical_flag, 
+         -C_plumbing_flag,
+         -D_course_avg_num_stu,
+         -D_course_end_grade,
+         -D_course_start_grade,
+         -D_course_counse_app_req,
+         -D_course_duration,
+         -C_concatenated_fields,
+         -D_gpa_level,
+         -D_gpa_count,
+         -D_gpa_scale,
+         -D_gpa_points,
+         -H_stay_duration_home_school,
+         -C_automotive_cluster_flag,
+         -C_health_sci_cluster_flag,
+         -C_arts_audio_video_comms_cluster_flag,
+         -C_bus_mrk_finance_cluster_flag,
+         -C_human_serv_cluster_flag,
+         -C_law_public_serv_cluster_flag,
+         -C_hospitality_tourism_cluster_flag,
+         -C_agr_food_and_nat_resources_cluster_flag,
+         -C_automotive_cluster_flag,
+         -C_stem_cluster_flag,
+         -C_architecture_construction_cluster_flag,
+         -C_manu_cluster_flag,
+         -C_edu_training_cluster_flag)
+         
+#unique list of Algebra 1 course ids
+merged_transcript_cohort_analysis %>%
+  filter(str_detect(D_course_name, "Algebra 1")) %>%
+  select(D_course_id, D_course_name) %>%
+  unique()
+
+#unique list of ELA 1 course ids
+merged_transcript_cohort_analysis %>%
+  filter(str_detect(D_course_name, "English 1")) %>%
+  select(D_course_id, D_course_name) %>%
+  unique()
+
+#break 9th grade students into two groups: those who failed Algebra 1, and those who did not
+merged_transcript_cohort_analysis <- merged_transcript_cohort_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(H_fail_alg_1 = as.numeric(any(D_course_id %in% c("MALR11", "MALH11", "IMAL11", "XSAM11") & C_grade < 70))) %>%
+  mutate(H_fail_ela_1 = as.numeric(any(D_course_id %in% c("LENR11", "IENG11", "LAPH11", "XVLS11", "XSAE11") & C_grade < 70)))
+
+#check counts
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(H_fail_alg_1) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(H_fail_ela_1) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#compare pathway enrollment rates
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_alg_1, C_pathway) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_ela_1, C_pathway) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#create a table with just D_stu_id, H_fail_alg_1, and H_fail_ela_1
+performance_table <- merged_transcript_cohort_analysis %>%
+  select(D_stu_id, H_fail_alg_1, H_fail_ela_1) %>% 
+  distinct()
+
+#merge into pathways table
+cohort_pathways_table <- 
+  cohort_pathways_table %>% left_join(performance_table, by = "D_stu_id")
+
+#check that each student only has one H_fail_alg_1 and H_fail_ela_1 value
+cohort_pathways_table %>% 
+  group_by(D_stu_id) %>% 
+  summarize(count_distinct_values_alg = n_distinct(H_fail_alg_1),
+            count_distinct_values_ela = n_distinct(H_fail_ela_1)) %>% 
+  arrange(desc(count_distinct_values_alg)) %>% 
+  ungroup() %>% 
+  print()
+
+#compare pathway statuses
+cohort_pathways_table %>%  
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_alg_1, C_pathway_status_roll_up) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+cohort_pathways_table %>%  
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_ela_1, C_pathway_status_roll_up) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+## 3.2 Credit recovery analysis
+
+### a. Credit recovery and pathway enrollment
+
+```{r}
+#remove summer school rows for this analysis
+merged_transcript_cohort_analysis_cr <- merged_transcript_cohort_analysis %>% 
+  filter(!D_location_id %in% c(520, 521, 522, 523, 524))
+
+#count students enrolled in course ids that start with "Q"
+merged_transcript_cohort_analysis_cr %>% 
+  filter(D_year == 2023) %>%
+  group_by(D_course_name, D_course_id) %>% 
+  summarize(count = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis_cr %>% 
+  filter(substr(D_course_id, 1, 1) == "Q") %>%
+  group_by(D_course_name) %>% 
+  summarize(count = n_distinct(D_stu_id)) %>% 
+  ungroup() 
+
+#flag all courses that start with "Q" as credit recovery and students enrolled in credit recovery
+merged_transcript_cohort_analysis_cr <- merged_transcript_cohort_analysis_cr %>%
+  mutate(C_credit_recovery_flag = ifelse(str_detect(D_course_id, "^Q"), 1, 0)) %>% 
+  group_by(D_stu_id) %>% 
+  mutate(C_credit_recovery_flag_student = ifelse(any(C_credit_recovery_flag == 1), 1, 0))
+
+#check by creating table with distinct list of D_course_id grouped by C_credit_recovery_flag
+merged_transcript_cohort_analysis_cr %>% 
+  group_by(C_credit_recovery_flag) %>% 
+  summarize(course_ids = unique(D_course_id)) %>% 
+  ungroup()
+
+#check student counts
+merged_transcript_cohort_analysis_cr %>% 
+  group_by(C_credit_recovery_flag) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis_cr %>%
+  group_by(C_credit_recovery_flag_student) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis_cr %>%
+  filter(C_cohort_final == "include") %>% 
+  group_by(C_credit_recovery_flag_student) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#compare pathway enrollment rates for credit recovery students
+merged_transcript_cohort_analysis_cr %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_credit_recovery_flag_student, C_pathway) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#create a table with just D_stu_id and C_credit_recovery_flag_student
+credit_recovery_table <- merged_transcript_cohort_analysis_cr %>%
+  select(D_stu_id, C_credit_recovery_flag_student) %>% 
+  distinct()
+
+#merge into pathways table
+cohort_pathways_table <- 
+  cohort_pathways_table %>% left_join(credit_recovery_table, by = "D_stu_id")
+
+#check that each student only has one C_credit_recovery_flag_student
+cohort_pathways_table %>% 
+  group_by(D_stu_id) %>% 
+  summarize(count_distinct_values_cr = n_distinct(C_credit_recovery_flag_student)) %>% 
+  arrange(desc(count_distinct_values_cr)) %>% 
+  ungroup() %>% 
+  print()
+
+#compare pathway statuses
+cohort_pathways_table %>%  
+  filter(C_cohort_final == "include") %>%
+  group_by(C_credit_recovery_flag_student, C_pathway_status_roll_up) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+### b. Multiple credit recovery credits and pathway completion
+
+```{r}
+#flag students who enroll in a total of 2 or more credits with C_credit_recovery flag
+merged_transcript_cohort_analysis_cr <- merged_transcript_cohort_analysis_cr %>%
+  group_by(D_stu_id) %>%
+  mutate(H_total_recovery_creds_enrolled = ifelse(any(C_credit_recovery_flag == 1), sum(D_creds_possible[C_credit_recovery_flag == 1], na.rm = TRUE), 0)) %>%
+  mutate(C_mult_recovery_creds_enrolled = ifelse(H_total_recovery_creds_enrolled >= 2, 1, 0)) %>%
+  ungroup()
+
+#counts
+merged_transcript_cohort_analysis_cr %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_mult_recovery_creds_enrolled) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#compare pathway enrollment statuses
+merged_transcript_cohort_analysis_cr %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_mult_recovery_creds_enrolled, C_pathway) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#create table with just C_mult_recovery_creds_enrolled and D_stu_id
+mult_recovery_creds_table <- merged_transcript_cohort_analysis_cr %>%
+  select(D_stu_id, C_mult_recovery_creds_enrolled) %>% 
+  distinct()
+
+#left join
+cohort_pathways_table <- 
+  cohort_pathways_table %>% left_join(mult_recovery_creds_table, by = "D_stu_id")
+
+#compare pathway statuses
+cohort_pathways_table %>%  
+  filter(C_cohort_final == "include") %>%
+  group_by(C_mult_recovery_creds_enrolled, C_pathway_status_roll_up) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+## 3.3 Transferring and pathway completion
+
+```{r}
+#count number of D_location_name values for each student, group by C_stu_multiple_locations
+merged_transcript_cohort %>%
+  filter(C_cohort_final == "include" & !(D_location_id %in% c(520, 521, 522, 523, 524))) %>%
+  group_by(D_stu_id, C_stu_multiple_locations) %>% #NOTE that this flag was created in the student ENROLLMENT file, not the student transcript file, so it might appear that students with a "Y" do not have multiple location ids, but they did based on the student enrollment file, they just must not have received a grade at that school
+  summarize(count_locations = n_distinct(D_location_name)) %>%
+  arrange(desc(count_locations)) %>%
+  ungroup()
+
+#count number of location ids for students with N for C_stu_multiple_locations
+merged_transcript_cohort %>%
+  filter(C_cohort_final == "include" & 
+           C_stu_multiple_locations == "N" & 
+           !(D_location_id %in% c(520, 521, 522, 523, 524))) %>%
+  group_by(D_stu_id) %>%
+  summarize(count_locations = n_distinct(D_location_id)) %>%
+  arrange(desc(count_locations)) %>%
+  ungroup()
+
+#count number of location ids for students with N for C_stu_multiple_locations
+merged_transcript_cohort %>%
+  filter(C_cohort_final == "include" & 
+           C_stu_multiple_locations == "Y" & 
+           !(D_location_id %in% c(520, 521, 522, 523, 524))) %>%
+  group_by(D_stu_id) %>%
+  summarize(count_locations = n_distinct(D_location_id)) %>%
+  arrange(desc(count_locations)) %>%
+  ungroup()
+
+merged_transcript_cohort %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_stu_multiple_locations) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+cohort_pathways_table %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_stu_multiple_locations) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+cohort_pathways_table %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_stu_multiple_locations, C_pathway_status_roll_up) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+## 3.4 Advanced course enrollment
+
+```{r}
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(C_rigor) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#by school
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>% 
+  group_by(C_rigor, C_home_school_name) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+## 3.5 9th grade performance and advanced coursework enrollment
+
+```{r}
+#compare rigor statuses
+merged_transcript_cohort_analysis %>%  
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_alg_1, C_rigor) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis %>%  
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_ela_1, C_rigor) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#multiple credits advanced coursework
+#flag students who enroll in a total of 2 or more credits with C_rigor "Above Standard" flag
+merged_transcript_cohort_analysis <- merged_transcript_cohort_analysis %>%
+  group_by(D_stu_id) %>%
+  mutate(H_total_adv_creds_enrolled = ifelse(any(C_rigor == "Above Standard"), sum(D_creds_possible[C_rigor == "Above Standard"], na.rm = TRUE), 0)) %>%
+  mutate(C_mult_adv_creds_enrolled = ifelse(H_total_adv_creds_enrolled >= 4, 1, 0)) %>%
+  ungroup()
+
+#counts
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(C_mult_adv_creds_enrolled) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+#compare adv enrollment statuses
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_alg_1, C_mult_adv_creds_enrolled) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+merged_transcript_cohort_analysis %>% 
+  filter(C_cohort_final == "include") %>%
+  group_by(H_fail_ela_1, C_mult_adv_creds_enrolled) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+```
+
+# Part III: Export
+
+```{r}
+# Get today's date
+current_date <- format(Sys.Date(), "%m.%d.%y") # will update with the date it was last run
+
+# Write data frame to Excel file with today's date included in the file name
+write.xlsx(cohort_pathways_table,
+           file = paste0(full_file_path, "Validated data/3_cohort_pathways_table_", current_date, ".xlsx"),
+           rowNames = FALSE)
+```

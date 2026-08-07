@@ -1,0 +1,728 @@
+---
+title: "1_raw_data_transcript_validation"
+author: "Simon Ellis"
+reviewer: "Zach Friedman"
+initial write-up: July 23 2024
+review:
+last update: April 2 2025
+output: html_document 
+  toc: yes
+  df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and Connect to Sharepoint
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+# Part 1: Set your folder path(s) and read in your data
+
+## 1.1 Bring in data for a Singular File
+
+-   **What:** The code below sets file path and brings in data from one file. If your data is spread out over multiple files - i.e., **one file per year, go to step 1.1**
+
+-   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
+
+```{r, warning = F, message = F}
+
+raw_data_folder_path <- "Core Services/Strategy & Innovation/Data Strategy & Innovation/3. R Stuff/Transcript Templatization (2024)/Dummy Data"
+
+#bring in file
+transcript_raw <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "HPS_transcript_data.csv",
+                   drive_name = "internal_drive")
+
+# Clean column names to remove spaces and special characters
+transcript_raw  <- transcript_raw  %>% clean_names()
+```
+
+## 1.1 Bring in data for Multiple Files (skip if you are working with one year of data/one file)
+
+-   **What:** The code below grabs all csv files in a folder and stacks the data into one data frame. Use this if your data is spread out across multiple files (e.g., student_dem_2019, student_dem_2020, student_dem_2021). Otherwise, Jump to Part II
+
+-   **Project Team Action:**
+
+    -   Make sure that all relevant files are in one folder in SharePoint.
+
+    -   Replace the file path below with your file path (in the code chunk below the first one)
+
+-   **NOTES:** *This long function will most likely be replaced by an ers_tools package by end of March 2025. Check back for details!*
+
+```{r}
+#1. Run the function
+ers_read_sharepoint_folder <- function(folder_path,
+                                file_name_with_extension = NULL,
+                                sheet_name = NULL,
+                                drive_name = "client_work_drive",
+                                skip_rows = 0,
+                                na_values = c(""))
+{
+  # Clean the folder path and extract the drive name from it if not explicitly provided
+  cleaned <- erstools::ers_sharepoint_path_clean(folder_path)
+  folder_path <- cleaned$path_clean  # Cleaned folder path for SharePoint
+  if (missing(drive_name)) {
+    drive_name <- cleaned$drive_name
+  }
+  # Assign Drive
+  orgfiles_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/orgfiles") %>% suppressMessages
+  external_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/external") %>% suppressMessages
+  data_hub_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/ers-data") %>% suppressMessages
+  client_work_drive <- orgfiles_site$get_drive("Client Work")
+  internal_drive <- orgfiles_site$get_drive("Internal")
+  external_drive <- external_site$get_drive("Documents")
+  data_hub_drive <- data_hub_site$get_drive("Documents")
+  drive <- switch(drive_name,
+                  client_work_drive = client_work_drive,
+                  internal_drive = internal_drive,
+                  external_drive = external_drive,
+                  data_hub_drive = data_hub_drive,
+                  stop("Invalid drive name. Use 'client_work_drive', 'internal_drive', 'external_drive', or 'data_hub_drive'."))
+  # Error message if folder path doesn't exist
+  folder_item <- try(drive$get_item(folder_path), silent = TRUE)
+  if (inherits(folder_item, "try-error")) {
+    stop("Folder path does not exist: '", folder_path, "'")
+  }
+  # STEPS FOR READING IN WHOLE FOLDER OF FILES
+  if (is.null(file_name_with_extension)) {
+    files <- drive$list_items(folder_path)
+    valid_files <- files[grepl("\\.(csv|xls|xlsx)$", files$name, ignore.case = TRUE), ]
+    # Error message if no files in folder
+    if (nrow(valid_files) == 0) {
+      stop("No valid files (.csv, .xls, .xlsx) found in the folder.")
+    }
+    # Create a data list and use fread or read_excel to read in the files
+    data_list <- list()
+    for (file in valid_files$name) {
+      file_path <- file.path(folder_path, file)
+      temp_file <- tempfile(fileext = paste0(".", tools::file_ext(file)))
+      drive$download_file(file_path, dest = temp_file)
+      file_data <- if (tools::file_ext(file) == "csv") {
+        fread(temp_file, skip = skip_rows, na.strings = na_values)
+      } else {
+        read_excel(temp_file, na = na_values, guess_max = 100000)
+      }
+      data_list[[tools::file_path_sans_ext(file)]] <- file_data
+    }
+    #assign dataframes to environment
+    return(invisible(data_list))
+  }
+  #PROCESS SINGLE FILE ONLY
+  file_name_with_extension <- gsub("%20", " ", file_name_with_extension)
+  data_path <- file.path(folder_path, file_name_with_extension)
+  #Error message if file doesn't exist
+  file_item <- try(drive$get_item(data_path), silent = TRUE)
+  if (inherits(file_item, "try-error")) {
+    stop("File '", file_name_with_extension, "' does not exist in folder: '", folder_path, "'")
+  }
+  file_extension <- paste0(".", tools::file_ext(file_name_with_extension))
+  temp_file <- tempfile(fileext = file_extension)
+  drive$download_file(data_path, dest = temp_file)
+  raw_data <-
+    if (tools::file_ext(file_name_with_extension) == "csv") {
+      fread(temp_file, skip = skip_rows, na.strings = na_values)
+    } else if (tools::file_ext(file_name_with_extension) %in% c("xls", "xlsx")) {
+      read_excel(temp_file, sheet = sheet_name, skip = skip_rows, na = na_values, guess_max = 100000)
+    } else if (tools::file_ext(file_name_with_extension) == "shp") {
+      # Create a temporary directory
+      temp_dir <- tempdir()
+      # Define possible extensions
+      shp_components <- c("shp", "shx", "dbf", "prj", "cpg")
+      # Download each component
+      for (ext in shp_components) {
+        file_path <- file.path(temp_dir,
+                               paste0(tools::file_path_sans_ext(file_name_with_extension), ".", ext))
+        drive$download_file(file.path(folder_path,
+                                      paste0(tools::file_path_sans_ext(file_name_with_extension),
+                                             ".", ext)), dest = file_path)
+      }
+    } else {
+      stop("Unsupported file format. Supported formats are xls, xlsx, csv, shp: '", file_name_with_extension, "'")
+    }
+  return(raw_data)
+}
+```
+
+```{r}
+#get the list of files
+data_list <- ers_read_sharepoint_folder("https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/District%20Partners/Denver/2024%20Transcript%20Analysis/1.%20Data%20&%20Analysis%20-%20Secure/1.0%20Raw%20Data/Student%20Dem%20Files")
+
+
+# Use list2env to assign to your environment
+list2env(data_list, envir = .GlobalEnv)
+
+# Bind all tables into a single dataframe
+transcript_all_yrs <- bind_rows(data_list, .id = "source_file")  # Adds a column indicating source file (optional)
+
+# Clean column names to remove spaces and special characters
+transcript_all_yrs<- transcript_all_yrs %>% clean_names()
+
+# View combined data
+ers_column_info(transcript_all_yrs)
+```
+
+## Part 2: Validate Data
+
+### 2.1 Rename Columns
+
+#### a. Map project column names to ERS standard names
+
+-   **What:** Assign your project's column names to ERS standard column names. ERS Standard names are on the left side of the equal sign, your district's columns are on the right. See resolution of critical/important fields that are missing in step 2.2b. Having standard column names is critical for this code running without error
+
+-   **Check:** In your data, all the critical fields are present and most of the important fields are present
+
+-   **Project Team Action:** Definitely change (see guidance in code block)
+
+```{r}
+#if the ERS Standard column is present in your data then type your district's column on the right hand side (it is okay if the names are identical)
+#if the ERS Standard column is not present in your data then type "MISSING"
+#you can also exclude the columns you do not need for your analysis by simply not renaming those columns in this step (the mutate function with the .keep = none argument only retains columns that follow the ERS column tagging convention)
+
+
+transcript_all_yrs <- transcript_raw %>%
+  mutate(
+    # critical
+    D_stu_id = stu_id1,
+    D_course_id = crs_id, 
+    D_course_name = crs_name, 
+    D_location_id = detailed_location,
+    D_year = school_yr,
+    D_term = term,  # this could be like 1, 2, or a term ID depending on district
+    D_teacher_id = empl_id_tchr1,
+    D_stu_grade = stu_grade_outcome,
+    D_creds_earn = stu_credits_earned,
+    D_creds_possible = nbr_credits_possible,
+    #nice to have
+    D_course_section = section,
+    D_location_name = NA,
+    D_course_subject = crs_subject,
+    D_course_subject_desc = NA,
+    D_course_credit_recovery = NA,
+    D_course_pathway = NA,
+    D_cte_flag = NA,
+    D_course_rigor = NA,
+    .keep = "none"  # This drops any column not explicitly created above
+  )
+
+```
+
+#### b. Review columns
+
+-   **What:** Manually check that you have the columns you need/would expect after renaming, and have not lost any critical data. Review the columns you are missing (as necessary).
+
+-   **Check:** Ensure that none of the missing fields are critical for your analysis AND expected to be included in a transcript data file (I.e., it is okay if you are missing student demographic fields if you got a separate student file from the district)
+
+-   **Project Team Action:** If the missing column(s) cannot be created from available data, please talk to your team lead and discuss if the column(s) is required and if yes, reach out to the district to get this and rerun this validation script on the new data file. You can disregard fields that will be merged in later, but keep track of them for later.
+
+### 2.1 Manual Checks
+
+##### JK Comments:
+
+-   *Updated for readability*
+
+-   *For the second check and third checks re: semesters/courses and credits - this feels like there could be helpful code to accompany this..maybe its a group by statement of semester, credits, and courses, etc?*
+
+-   *SE- Added!*
+
+-   **What:** a handful of validation checks are most readily done through quick manual steps rather than R code - for the checks outlined below, run them in the non-code way suggested and then manually input them into a checks table in OneNote, Word, or another tool.
+
+    -   Do we have right year(s) of data?
+
+        -   Check: Look at the name of your raw data file and see if date has been included somewhere in it. Alternatively, skim your raw data and see if any of the fields outline the date that the data was pulled by the district team. If all else fails - simply ask your district contact!
+
+    -   Does term signify years, semesters, or quarters? What is the relationship between credits and term?
+
+        -   Check: look at the term column to determine how term is used, and how many credits are typically earned by course. For example, if there is one row per course per semester, you would expect to see that courses are worth 0.5 credits
+
+```{r}
+#group by term and count the number of unique values in that column
+transcript_all_yrs %>%
+  group_by(D_term) %>%
+  summarize(n = n_distinct(D_term)) %>% 
+  ungroup()
+
+#group by course name and list the unique names of each course. Are they seperated out by semesters?
+transcript_all_yrs %>%
+  group_by(D_course_name) %>%
+  summarize(n = n_distinct(D_course_name)) %>% 
+  ungroup()
+
+```
+
+-   Are there types of courses that tend to be worth more credits?
+
+    -   Check: Continue to build understanding of how credits are organized. LOok for differences by types of courses. For example, CTE or practicum courses tend to be worth more credits. That is okay, right now you are just trying to understand the structure of the file
+
+```{r}
+#group by credits earned and ensure that values match course notation (ie. semester courses carry .5, etc.)
+transcript_all_yrs %>%
+  group_by(D_creds_earn) %>%
+  summarize(n = n_distinct((D_creds_earn))) %>% 
+  ungroup()
+
+```
+
+-   **Project Team Action:** Gut check/track
+
+### 2.2 Understand File Structure
+
+#### a. Number of Total Rows
+
+-   **What:** Understand the structure of your file by loading the number of rows
+
+-   **Check:** The number of rows depends on how many courses you expect the student to have per year, which is explained by how many terms/periods/rotations are covered in the data. For example, if classes are organized by semester across 8 periods and repeat daily, you expect to see the number of rows be equal to 2 \* 8 \* 1 \* count of high school students. If classes are organized by quarter across 7 periods and repeat daily, you expect to see the number of rows be equal to 4 \* 7 \* 1 \* count of high school students
+
+-   **Project Team Action:** update the Data Validation Checks table with the result of your check. You might write something like "all five files have roughly XX rows each, which matches our expectation since there's YY total high school students per year and classes happen on a X term / X rotation / X period format"
+
+```{r}
+# Count number of rows
+transcript_all_yrs %>% nrow() #View output of check to know what to write for your status column
+```
+
+#### b. Remove Rows
+
+-   **What:** If any of the rows are repetitive or not required for your analysis you can remove them. For example - you have multiple years of data but only need one, your data has any totally or almost totally blank rows, etc.
+
+-   **Check:** If you have indeed removed rows from your tables through code, ensure that your table now has fewer rows than it did before.
+
+-   **Project Team Action:** add code as required
+
+```{r}
+#Add code/comments here if resolution is required
+
+#remove rows
+# Remove rows where a specific condition is met
+# For example, remove rows where age is less than 18
+
+# transcript_all_yrs <- transcript_all_yrs %>%
+#   filter(age >= 18)
+# 
+# # Print the result
+# print(head(transcript_all_yrs))
+
+```
+
+#### c. Review current columns
+
+-   **What:** View the data as a table to understand the values in each column
+
+-   **Check:** A new tab is created with a table view of your data
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r}
+#move data viewer to another tab to view both at once. Click on the "show in new window" button in the top left of the data viewer tab (just to the right of the left and right arrows)
+transcript_all_yrs %>% View
+```
+
+### 2.5 Are there any duplicates?
+
+#### a. Review Duplicates Table
+
+-   **What:** Understand if we have any fully duplicated rows
+
+-   **Check:** Review the transcript_combined_file_dups table to understand the duplicates and why they are appearing before deleting
+
+```{r}
+#View duplicates
+transcript_all_yrs %>%
+  group_by_all() %>%
+ mutate(n = n()) %>%
+    filter(n>1) %>% 
+    ungroup()
+  
+```
+
+#### b. Remove Duplicates
+
+-   **What:** The below code chunk will remove the duplicate rows, so only run once you feel confident they are true duplicates.
+
+-   **Check:** That the number of duplicates is now 0.
+
+-   **Project Team Action:** None
+
+```{r}
+#removes duplicates
+transcript_all_yrs <- transcript_all_yrs[!duplicated(transcript_all_yrs), ]
+
+```
+
+### 2.6 Missing & Unique values
+
+#### a. Update Blanks or NULL to NA
+
+-   **What**: This will update all blanks ("") or nulls with NA, a special value in R that denotes missing data. This will make it easier to deal with missing data throughout the code
+
+-   **Check**: See below
+
+-   **Project Team Action:** None (run as is)
+
+```{r}
+# Update blanks or NULL to NA
+transcript_all_yrs <- transcript_all_yrs %>%
+  mutate(across(everything(), ~if_else(. %in% c("", NULL, "(null)"), NA, .)))
+```
+
+#### b. Review missing data
+
+-   **What:** Understand if we have any blanks or NAs in key fields
+
+-   **Check:** Are there any critical columns with NA/blank values? Do the Unique values for things like Student ID and D_location match expectations?
+
+-   **Project Team Action:** (1) Review output and note any key columns with a large % of missing values. Are they critical? Do you need to ask district about missing data? Discuss any issues with project team. (2) Do the unique count of rows align with what you would expect to see? Investigate further as needed after checking for duplicates
+
+```{r}
+#create new data frame with column information
+col_info <-  data.frame(
+  Column_Name = names(transcript_all_yrs),
+  Data_Type = sapply(transcript_all_yrs, class),
+  Count_Rows = sapply(transcript_all_yrs, function(x) length(na.omit(x))),
+  NA_Rows = sapply(transcript_all_yrs, function(x) sum(is.na(x))),
+  Unique_Rows = sapply(transcript_all_yrs, function(x) length(unique(na.omit(x)))),
+  stringsAsFactors = FALSE,
+  row.names= NULL
+)
+
+#calc % missing
+col_info <- col_info %>%
+            mutate(Percent_Missing = NA_Rows / Count_Rows * 100)
+
+#print new data frame
+col_info
+
+## Same thing as above, but instead of NA values, look at 0 values
+#create new data frame with column information
+col_info_zero <-  data.frame(
+  Column_Name = names(transcript_all_yrs),
+  Data_Type = sapply(transcript_all_yrs, class),
+  Count_Zero = sapply(transcript_all_yrs, function(x) sum(x == 0)), # Count zero values
+  Total_Rows = nrow(transcript_all_yrs), # Total number of rows in transcript_combined_file
+  stringsAsFactors = FALSE,
+  row.names= NULL
+)
+
+col_info_zero <- col_info_zero %>%
+  mutate(Percent_Zero = Count_Zero / Total_Rows * 100)
+
+# count of zero values of section ID by location name 
+transcript_all_yrs %>%
+  group_by(D_location_name) %>%
+  summarize(
+    zero_count = sum(D_course_section == 0)
+  ) %>% 
+   ungroup()
+
+
+#calc % missing
+col_info <- col_info %>%
+            mutate(Percent_Missing = NA_Rows / Count_Rows * 100)
+
+#print new data frame
+print(col_info)
+
+```
+
+#### c. Review missing data for high schools / schools of interest
+
+##### JK Comments
+
+-   *this denver data doesn;t have section id....would it be helpful to offer guidance with what to do when there is no section id? What column should a team use instead? Should they attempt to create one instead?*
+
+-   *SE- sometimes we need it, sometimes we don't! added gudance for what to do if we don't have it :) JK 4/7 thank you!!*
+
+-   **What:** Understand if we have any blanks or NAs in key fields for schools of interest (it is possible that the district provided data for other locations that aren't actually schools and do not have section IDs). If you don't have or need section IDs, you can skip this step.
+
+-   **Check:** Are there any critical columns with NA/blank values? Do the Unique values for things like student ID and D_location match expectations?
+
+-   **Project Team Action:** (1) Review output and note any key columns with a large % of missing values. Are they critical? Do you need to ask district about missing data? Discuss any issues with project team. (2) Do the unique count of rows align with what you would expect to see? Investigate further as needed after checking for duplicates
+
+```{r}
+#investigating school codes with the most section values
+#group by D_location_id and count unique D_course_section values within each group
+transcript_all_yrs %>%
+  group_by(D_location_id) %>%
+  summarise(section_count = n_distinct(D_course_section))
+
+```
+
+#### d. List the counts of students per course and counts of students missing sections for each course
+
+-   **What:** Investigating students who are missing section IDs in schools of interest further. With the printed result. Filtered / sorted to look at the courses with the highest % of students missing sections. See if the students who weren't assigned sections were in really small sections where there would only be one section.If you don't have or need section IDs, you can skip this step.
+
+-   **Check:** Are there any irregularities or disparities in enrollment that would cause concern for the integrity of the data?
+
+-   **Project Team Action:** Follow up as necessary
+
+```{r}
+#Group the data by D_location_id and D_course_name, then summarize to get counts
+
+# If course ID is zero, set it to NA
+transcript_all_yrs <- transcript_all_yrs %>%
+  mutate(D_course_id = ifelse(D_course_id == 0, NA, D_course_id))
+
+result_missing_sections <- transcript_all_yrs %>%
+  group_by(D_year, D_location_id, D_course_name) %>%
+  summarize(
+    count_students_per_course = n(),
+    count_students_missing_sections = sum(is.na(D_course_section))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    count_students_per_course = ifelse(is.na(count_students_per_course), 0, count_students_per_course),
+    count_students_missing_sections = ifelse(is.na(count_students_missing_sections), 0,     
+    count_students_missing_sections),
+    percent_missing_sections = (count_students_missing_sections / count_students_per_course) * 100
+  )
+
+#Print the result
+print(result_missing_sections)
+```
+
+### 2.7 Student counts by school by year
+
+#### JK Comments
+
+-   *Might be helpful to add "pivot_wider" so that the columns are in years*
+
+-   *SE- Added! JK 4/7 - Thanks!*
+
+    **What:** Count the number of students at each school per year to build confidence in data
+
+-   **Check:** Are there any irregularities or disparities in enrollment or schools that would cause concern for the integrity of the data?
+
+-   **Project Team Action:** Follow up as necessary
+
+```{r}
+#count the number of students (D_stu_id) at each school (D_location_id) per year (D_year)
+students_count_by_school_year <- transcript_all_yrs %>%
+  group_by(D_location_id, D_year) %>%
+  summarise(
+    students_count = n_distinct(D_stu_id)
+  ) %>% 
+  ungroup()
+
+#using pivot wider, print the results to view number of students by year in a simple table
+students_count_by_school_year <- students_count_by_school_year %>%
+  pivot_wider(names_from = D_year, values_from = students_count) %>% 
+  print()
+
+```
+
+### 2.8 Distinct count of students by location id
+
+#### JK Comments
+
+-   *Maybe helpful to note what a project team should do when there are low counts of students at school. For example, for denever there were some school with counts of 12, etc. Would that indicate an alt school that a project team should think about excluding? Maybe helpful to add an arrange clause at the bottom that sorts the counts of students from low to high?*
+
+-   *SE- Added language and cleaned up the code! 4/7 JK woo!*
+
+-   **What:** Count of students at each school. This check might helpful confirm any exclude/include schools for your teams analysis (like alternative schools).
+
+-   **Check:** Check across other files while you validate them, and if necessary exclude schools with low student counts.
+
+-   **Project Action:** Gut check/track
+
+```{r}
+#calculate the total count of distinct D_stu_id across all locations
+transcript_all_yrs %>%
+  summarise(
+   total_students_count = n_distinct(D_stu_id)
+  ) 
+
+#count the number of students (D_stu_id) at each location D_location_id)
+transcript_all_yrs %>%
+  group_by(D_location_id, D_location_name) %>%
+  summarise(
+    students_count = n_distinct(D_stu_id)
+  ) %>% 
+  arrange(desc(students_count)) %>% 
+  ungroup()
+
+```
+
+### 2.9 Distribution of students by Term
+
+##### JK Comments
+
+-   *Updated project action*
+
+-   **What:** Count of records by term at each school. Given your project needs, you may want to just filter your original data-frame (transcript_combined_file) to only include high schools of interest for this step. If you are looking at all locations, you can skip this step.
+
+-   **Check:** Review the tables to understand if there is an even distribution of semester 1 and semester 2 classes
+
+-   **Project Action:** Update the numbers in the first line of code to match the location codes in your district's data
+
+```{r}
+#Filtering only to high schools of interest for this step, but you might choose to look at distribution of students by term for all locations based on project needs
+
+filtered_high_schools <- transcript_all_yrs[transcript_all_yrs$D_location_id %in% c(1, 2, 3),]
+
+#View count of records by D_term/school
+filtered_high_schools %>%
+  filter(!is.na(D_term)) %>%
+  group_by(D_location_id, D_term) %>% 
+  count(sort = TRUE) %>%
+  arrange(D_location_id) %>%
+  group_by(D_location_id) %>% 
+  mutate(perc_D_term_at_school = round(100 * n / sum(n), 1)) %>%
+  select(D_location_id, D_term, perc_D_term_at_school) %>%
+  pivot_wider(names_from = D_term, 
+              values_from = perc_D_term_at_school, 
+              names_prefix = "D_term_") %>%
+  rename_all(~ ifelse(. == "", "D_term_unknown", .)) %>% 
+  ungroup()
+
+filtered_high_schools %>% 
+  group_by(D_term, D_location_id) %>% 
+  summarize(student_count = n_distinct(D_stu_id)) %>% 
+  arrange(D_location_id) %>% 
+  group_by(D_location_id) %>% 
+  mutate(percent_students = round(100 * student_count / sum(student_count), 0)) %>% 
+  ungroup() 
+```
+
+### 2.10 Distinct count of course IDs by student id
+
+-   **What:** Count of course IDs by student id. If you did not filter any high schools in step 2.9, you may need to change the name of your data-frame.
+
+-   **Check:** Review the counts courses by student id. You would expect to a mix since you have freshmen, sophomore, junior, and senior data across five years. You would also expect to see a maximum of \~# of classes students can take per year \*4
+
+-   **Project Action:** No updates
+
+```{r}
+course_bucket_summary <- transcript_all_yrs %>% 
+  group_by(D_stu_id) %>%
+  summarize(Course_Count = n_distinct(D_course_name), .groups = "drop") %>% 
+  mutate(Course_Count_Bucket = case_when(
+    Course_Count == 0 ~ "00",
+    Course_Count <= 2 ~ "01-02",
+    Course_Count <= 4 ~ "03-04",
+    Course_Count <= 6 ~ "05-06",
+    Course_Count <= 8 ~ "07-08",
+    Course_Count <= 10 ~ "09-10",
+    Course_Count <= 12 ~ "11-12",
+    Course_Count <= 16 ~ "13-16",
+    Course_Count <= 20 ~ "17-20",
+    Course_Count <= 24 ~ "21-24",
+    Course_Count <= 28 ~ "25-28",
+    Course_Count <= 32 ~ "29-32",
+    Course_Count > 32 ~ "33+"
+  ))
+
+# Count number of students in each bucket
+bucket_counts <- course_bucket_summary %>%
+  count(Course_Count_Bucket, name = "n_students") %>%
+  mutate(total_students = sum(n_students),
+         pct_of_total = round(100 * n_students / total_students, 2))
+
+# View result
+View(bucket_counts)
+
+```
+
+### 2.11 Distinct count of students per Section
+
+##### JK Comments
+
+-   *What should project teams do if they dont have a section ID?*
+
+-   **What:** Returns the number of students per section per school.If you do not have section IDs in your data or need them for analysis, you can skip this step.
+
+-   **Check:** Visually investigate the resulting enrollment_count_by_location_id table. You are looking for wonky things - really big core sections, really small PE sections. We want to ensure we have complete data. Sort count of students per section from highest to lowest. Which courses have the largest sections? Which courses have the smallest sections?
+
+-   **Project Action:** None
+
+```{r}
+#calculate the total number of students for each location
+filtered_high_schools %>%
+  group_by(D_location_id) %>%
+  summarise(total_students = n_distinct(D_stu_id)) %>% 
+  ungroup()
+
+
+#calculate the number of students enrolled in each course and section at each location
+filtered_high_schools %>%
+  group_by(D_location_id, D_course_name, D_course_section, D_year) %>%
+  summarise(
+    students_enrolled = n_distinct(D_stu_id)
+  ) %>%
+  ungroup() 
+
+
+## Count the number of rows where course_section is equal to zero. 
+filtered_high_schools %>% 
+  filter(D_course_section == 0) %>% 
+  count()
+
+# calculate the percent of this out of total rows
+filtered_high_schools %>% 
+  filter(D_course_section == 0) %>% 
+  count() / nrow(filtered_high_schools)
+
+# write a table with the count of values of D_course_section that equal zero by school_year
+filtered_high_schools %>% 
+  filter(D_course_section == 0) %>% 
+  group_by(D_year) %>% 
+  count()
+
+
+```
+
+# Part 3: Upload File to Sharepoint
+
+-   **What:** Upload validated dataframes as .csv files to sharepoint for further analysis.
+
+-   **Check:** None/Update names of data-frames as needed for team.
+
+-   **Project Action:** None
+
+```{r}
+processed_data_folder_path <- "Core Services/Strategy & Innovation/Data Strategy & Innovation/3. R Stuff/Transcript Templatization (2024)/Dummy Data"
+
+
+ers_write_sharepoint(data = transcript_all_yrs,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "HPS_transcript_validated.csv",
+                    drive_name = "internal_drive")
+```
+
+## Part 4: Knit the file into a nicely formatted HTML that you can share with teammates!
+
+**ACTION: ALL YOU NEED TO DO IS Use Ctrl+Shift+K to knit your file, and it will upload an html file to your Github repo in a folder called "knitted files"!**
+
+## OPTIONAL Part 5: Upload knitted file to Sharepoint
+
+**ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
+
+```{r eval = FALSE}
+# You can change the destination path of your knitted file here if you wish
+destination_of_knitted_file <- processed_data_folder_path
+
+# Define the path to the current R Markdown file
+current_file <- rstudioapi::getActiveDocumentContext()$path
+
+# Determine the output directory and file name for the knitted HTML
+output_dir <- dirname(current_file)
+output_file <- gsub(" ", "-", paste0(tools::file_path_sans_ext(basename(current_file)), ".html"))
+knitted_file <- file.path(output_dir, "knitted files", output_file)
+
+
+client_work_drive <- orgfiles_site$get_drive("Client Work")
+
+client_work_drive$upload_file(knitted_file, dest = file.path(destination_of_knitted_file, output_file))
+```

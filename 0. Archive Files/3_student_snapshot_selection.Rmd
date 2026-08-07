@@ -1,0 +1,705 @@
+---
+title: "3_student_snapshot_selection"
+author: "Simon Ellis"
+reviewer: "Zach Friedman"
+initial write-up: August 13 2024
+review:
+last update:
+output: html_document
+  toc: yes
+  df_print: paged
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Part I: Setup
+
+#### JK notes: 
+
+-   Replaced with updated template
+
+This part of the script allows you to:
+
+-   Load the functions that R will be using to work with your data (Excel automatically loads all its functions - if, countif, index, match, etc. - when you open it, but R requires manual loading of functions if you want full access to what it offers)
+
+-   Specify the Sharepoint folder where your raw data lives so R can pull it in
+
+-   Actually load in the raw data you'll be working with throughout the rest of the script
+
+## 1.1: Read Libraries and connect to Sharepoint
+
+-   **What:** This code block loads in all relevant function packages (a.k.a. R functions you'll be needing in this script). Note that if you haven't installed the packages into your computer yet, R will print an error and you'll need to install them first by running install.packages(tidyverse) and install.packages(formattable), etc.
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Do not change (run as is)
+
+    #### 
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+## 1.2 Set your folder path(s) and read in your data
+
+-   **What:** This code block combines the variables you created in the two previous steps to create one continuous file path to your data.
+
+-   **Check:** No error message coming out of code block, file path should match folder destination locally
+
+-   **Project Team Action:** Do not change (run as is)
+
+```{r}
+raw_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/District%20Partners/Columbus%20City/22-23%20Financial%20Equity%20&%20Funding%20System%20Design/1.%20Data%20&%20Analysis%20-%20Secure/Raw%20Data%20for%20R"
+
+raw_data <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "XXX.XXX")
+
+```
+
+### d. File Names
+
+-   **What:** This code block creates condensed versions of files names for ease of upload and analysis. You should update the code based on the specific names of your demographic files
+
+-   **Check:** No error message coming out of code block
+
+-   **Project Team Action:** Update with specific file names
+
+-   **RT Methodological Note:** Lubbock sent three sets of student files, so need to upload all. This will not be the case for most districts
+
+```{r, warning = F, message = F}
+#update to your file name. There are several functions and options to read in data based on what form your raw data is in. The below code is for reading in a csv file. If your data is in a different format, you will need to use a different function. For example, if your data is in an excel file, you would use read_excel() instead of read.csv().
+
+#transcript
+transcript_rollup_path <- "/3_transcript_roll_up_DATE.xlsx"
+
+#student
+validated_student_path <- "/1_student_data_validated_DATE.xlsx"
+```
+
+## 1.3 Load Data
+
+**What:** Now that R knows how to access the folder path, it's time to load in your raw data
+
+**Check:** The code block should print the names of all data files you need
+
+**Project Team Action:** None
+
+```{r}
+#transcript
+validated_transcript_data <- read.xlsx(paste0(full_file_path, transcript_rollup_path))
+
+# student
+# Define the column types vector to ensure that entry and exit dates are read as dates. This is necessary because Excel files do not store data types, so R needs to be told what type of data is in each column. Update as necessary with district specific column
+col_types <- c("text", "text", "text", "text",
+               "date", "date", "numeric",
+               "text", "text", "text", "text", "text", "text",
+               "text", "text", "text", "text","text"
+               )
+
+# Read data from an Excel file with specified column types
+validated_student_data <- read_excel(paste0(full_file_path, validated_student_path), col_types = col_types)
+```
+
+# Part II: Choosing Snapshot of Students
+
+## 2.1 Create student snapshot for SY 2023
+
+### a. Student counts before filtering
+
+-   **What:** Validation checks before filtering, including number of students, number of high schoolers, and number of students by location for included schools
+
+-   **Check:** Check counts before and after, make sure code block prints without error
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+#Filter data to just 2023. If you are using this script in later years, you will need to update this to the year you are working with
+student_snapshot_2023 <- validated_student_data %>% 
+  filter(D_year == 2023)
+
+#count distinct students before filtering
+student_snapshot_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#count of total HS students (in the case that your data frame contains non-high school students)
+total_hs_count <- student_snapshot_2023 %>% 
+  filter(D_grade %in% c(9, 10, 11, 12)) %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print(total_hs_count)
+
+
+#Count of students by location IDs before filtering- note that this count is NOT totally unique, it could be including students who have a row for each location
+student_snapshot_2023 %>% 
+  filter(D_stu_grade %in% c(9,10,11,12)) %>%
+  group_by(D_location_name) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#filter to schools of interest
+student_snapshot_2023 <- student_snapshot_2023 %>% 
+  filter(D_location_id %in% c(1, 2, 4, 29, 39)) #update location ids as needed to district specific locations for included schools
+
+
+```
+
+### b. Check student enter and exit dates
+
+-   **What:** Convert enter and exit dates to be as dates, and check for any students with more than one row
+
+-   **Check:** Check counts before and after, make sure code block prints without error
+
+-   **Project Team Action:** Gut check/track
+
+```{r}
+# convert enter and exit date to be as dates
+student_snapshot_2023 <- student_snapshot_2023 %>%
+  mutate(D_stu_enter_date = as.Date(D_stu_enter_date),
+         D_stu_exit_date = as.Date(D_stu_exit_date))
+
+#check student enter dates
+student_snapshot_2023 %>% 
+  group_by(D_stu_enter_date) %>% 
+  count() %>% 
+  arrange(desc(n)) %>%  # Arrange by count 'n' in descending order
+  ungroup()
+
+# Check student exit dates
+student_snapshot_2023 %>% 
+  group_by(D_stu_exit_date) %>% 
+  count() %>% 
+  arrange(desc(n)) %>%  # Arrange by count 'n' in descending order
+  ungroup()
+
+#add numeric exit and enter dates
+student_snapshot_2023 <- student_snapshot_2023 %>%
+   mutate(H_stu_enter_date_numeric = as.numeric(D_stu_enter_date),
+          H_stu_exit_date_numeric = as.numeric(D_stu_exit_date))
+```
+
+### c. Choose SY 2023 snapshot of students
+
+-   **What:** Create new data frame that includes students total stay of duration. You've already filtered to location ids of interest, so this field gives the sum of days enrolled in those locations. Join data frames to bring in this field
+
+-   **Check:** Check that you have 1 count per student id, and check a handful of students to make sure the code worked. For example, students enrolled for fewer total days should have a lower sum than students enrolled for more total days
+
+-   **Project Team Action:** Update Snapshot Checks table
+
+```{r}
+#assign home school based on duration of stay
+home_schools <- student_snapshot_2023 %>%
+  mutate(H_stay_duration = H_stu_exit_date_numeric - H_stu_enter_date_numeric) %>%
+  group_by(D_stu_id, D_location_id) %>%
+  summarize(H_stay_duration_home_school = sum(H_stay_duration, na.rm = TRUE)) %>%
+  group_by(D_stu_id) %>%
+  filter(H_stay_duration_home_school == max(H_stay_duration_home_school)) %>%
+  ungroup() %>%
+  rename(C_home_school_code = D_location_id)
+
+student_snapshot_2023 <- left_join(student_snapshot_2023, home_schools, by = "D_stu_id")
+
+
+#add C_home_school_name flag
+student_snapshot_2023$C_home_school_name <- student_snapshot_2023$D_location_name[match(student_snapshot_2023$C_home_school_code, student_snapshot_2023$D_location_id)]
+
+# If you have a student who has the same number of days at two schools, you will have a duplicate student ID, so going to remove that and write in a check!
+student_snapshot_2023_filtered <- student_snapshot_2023[student_snapshot_2023$D_stu_id == "77966", ]
+student_snapshot_2023_filtered <- student_snapshot_2023_filtered[1,]
+student_snapshot_2023 <- rbind(student_snapshot_2023[student_snapshot_2023$D_stu_id != "77966",], student_snapshot_2023_filtered)
+
+#total days enrolled in school
+students_duration <- student_snapshot_2023 %>%
+  mutate(H_stay_duration = H_stu_exit_date_numeric - H_stu_enter_date_numeric) %>%
+  group_by(D_stu_id) %>%
+  summarize(H_sum_stay_duration_year = sum(H_stay_duration, na.rm = TRUE)) %>%
+  ungroup()
+
+# check the number of rows that have the same student ID, enter date, and exit date
+# Spent equal number of time at "each school" (2) so it got duplicated
+check <- student_snapshot_2023 %>%
+  group_by(D_stu_id, D_stu_enter_date, D_stu_exit_date) %>%
+  summarise(row_count = n()) %>%
+  filter(row_count > 1)
+
+#and now its zero which is great!
+
+
+# Create a table of c_eoy_grade and count of students
+#I didn't have this variable, so not sure when that comes in. I am assuming its just "grade" as listed on the 
+student_snapshot_2023 %>% 
+  group_by(C_eoy_grade) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print() %>% 
+  ungroup()
+
+# count unique values of D_stu_id
+student_snapshot_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#count unique values of D_stu_id by home school
+student_snapshot_2023 %>% 
+  group_by(C_home_school_name) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+
+#check counts - should be 1 counts per stu id
+students_duration %>% 
+  group_by(D_stu_id) %>% 
+  summarize(count = n()) %>%
+  arrange(desc(count)) %>% 
+  ungroup() %>% 
+  print
+  
+#join data frames
+student_snapshot_2023 <- left_join(student_snapshot_2023, students_duration, by = c("D_stu_id"))
+```
+
+### d. Adding new criteria
+
+-   **What:** Add criteria for including students - they must have been enrolled in school for over 215 days which is \~75% of the school year
+
+-   **Check:** Check new count and that students don't have both include / exclude flags
+
+-   **Project Team Action:** Update Snapshot Checks table
+
+```{r}
+student_snapshot_2023 <- student_snapshot_2023 %>%
+  group_by(D_stu_id) %>%
+  mutate(
+    C_stu_snapshot = ifelse(any(H_stay_duration_home_school >= 215) > 0, "include", "exclude")
+  ) %>%
+  ungroup()
+
+#count includes
+student_snapshot_2023 %>% 
+  filter(C_stu_snapshot == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#count excludes
+student_snapshot_2023 %>% 
+  filter(C_stu_snapshot == "exclude") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#check that students don't have both include and exclude flags
+check <- student_snapshot_2023 %>%
+  group_by(D_stu_id) %>%
+  summarize(include_count = sum(C_stu_snapshot == "Y"),
+            exclude_count = sum(C_stu_snapshot == "N")) %>%
+  filter(include_count > 0 & exclude_count > 0)
+
+#this just checks the check table for you so that you don't have to
+if(nrow(check) == 0) {
+  print("No inconsistencies found.")
+} else {
+  print("Inconsistencies found.")
+}
+```
+
+### e. Checks on included & excluded students
+
+```{r}
+#check a few student ids
+student_dive <- student_snapshot_2023 %>% 
+  filter(D_stu_id == 110630) %>% 
+  print()
+
+student_dive_2 <- student_snapshot_2023 %>% 
+  filter(D_stu_id == 124207) %>% 
+  print()
+
+student_dive_3 <- student_snapshot_2023 %>% 
+  filter(D_stu_id == 126309) %>% 
+  print()
+
+student_dive_4 <- student_snapshot_2023 %>% 
+  filter(D_stu_id == 126584) %>% 
+  print()
+
+#counts of unique students with include flag by home school
+student_snapshot_2023 %>% 
+  filter(C_stu_snapshot == "include") %>%
+  group_by(C_home_school_name) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#count of unique students by grade with include flag
+student_snapshot_2023 %>% 
+  filter(C_stu_snapshot == "include") %>%
+  group_by(C_eoy_grade) %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  ungroup() %>% 
+  print()
+
+#Filter the snapshot data frame to be just include students at this point
+student_snapshot_2023 <- student_snapshot_2023 %>% 
+  filter(C_stu_snapshot == "include")
+
+```
+
+###f. MANOR ISD Specific Manor ISD Deep Dive- 06/05 update, we are not going to exclude those schools for now, we might want to later so I will comment this out for now but we DID get transcript data, so we could do looks if we wanted to - **What:** After a 05/20 update from the distict, we will be excluding any students with location IDs for New-Tech and Excel for the majority of the year in 2020 (over \~150 days, with the assumption that they would have associated transcript data that we would have to match in)
+
+-   **Check:** Check new count and that students don't have both include / exclude flags
+
+-   **Project Action:** O
+
+```{r}
+#First lets look at the existing snapshot student group by location. After the update we should expect no students at Excel or New-Tech
+#student_snapshot_2023 %>% 
+  #filter(C_stu_snapshot == "include") %>%
+  #group_by(C_home_school_name) %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #ungroup() %>% 
+  #print()
+
+
+#Now lets filter to students with a home school of Manor High, Manor Early College, or Manor Senior High, but location rows for either New-Tech or Excel
+#should now be zero after the udpdate!
+#students_to_check <- student_snapshot_2023 %>% 
+  #group_by(D_stu_id) %>% 
+  #filter(C_stu_snapshot == "include",
+         #C_home_school_code == "1"| C_home_school_code == "29"| C_home_school_code == "39",
+        #any(D_location_id %in% c(2, 4, 43))) %>% 
+  #print() %>% 
+  #ungroup()
+
+#count
+#students_to_check %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #print()
+
+#And it is zero which is great! All set at this point to bring in transcript data
+
+
+```
+
+# Part III: Merge in assessment data #Not using assesment data in this analysis
+
+# Part IV: Create transcript data frames
+
+## 4.1 Creating snapshot transcript data frames
+
+### a. Snapshot data frame with one row per student
+
+```{r}
+# create a flag for students who transferred (appear at multiple schools)
+student_snapshot_2023 <- student_snapshot_2023 %>%
+  group_by(D_stu_id) %>%
+  mutate(C_stu_multiple_locations = if_else(n_distinct(D_location_id) > 1, "Y", "N")) %>% 
+  ungroup()
+
+# count students who transferred
+student_snapshot_2023 %>% 
+  filter(C_stu_multiple_locations == "Y") %>% 
+  summarize(count_transfer_students = n_distinct(D_stu_id)) %>%
+  print()
+
+# LB NOTE TO SELF; Fix grade differences and then re-add it below
+## end of year grade is supposed to resolve any of the issues to flag students
+
+# Create a unique student snapshot based on the student snapshot 2023 by excluding location from the data frame
+student_snapshot_2023_unique <- student_snapshot_2023 %>% 
+  select(D_stu_id, 
+         D_stu_race, 
+         D_stu_frl, 
+         D_stu_swd, 
+         C_stu_snapshot,
+         C_stu_multiple_locations,
+         C_eoy_grade,
+         H_sum_stay_duration_year,
+         C_home_school_name, 
+         C_home_school_code,
+         ) %>% 
+  distinct()
+
+#count of students in the unique snapshot that have the include flag
+student_snapshot_2023_unique %>% 
+  filter(C_stu_snapshot == "include") %>%
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+# filter to any rows that have duplicate student ids
+student_snapshot_2023_unique %>%
+  group_by(D_stu_id) %>%
+  summarise(row_count = n()) %>%
+  filter(row_count > 1) %>%
+  nrow() %>% 
+  print()
+
+# view rows that have duplicates
+duplicates <- student_snapshot_2023_unique[duplicated(student_snapshot_2023_unique$D_stu_id) | duplicated(student_snapshot_2023_unique$D_stu_id, fromLast = TRUE), ]
+
+```
+
+### b. Return & remove mismatched student ids
+
+-   **What:** Return & remove student ids that exist in 2023 student snapshot file but not 2023 transcript file this will make merging easier later on
+
+-   **Check:** Number of rows at end is as expected
+
+-   **Project Team Action:** Update Snapshot Analysis Set-up table
+
+```{r}
+# Filter transcript data to only include data from 2023
+transcript_2023 <- validated_transcript_data %>%
+  filter(D_year == 2023)
+
+# Identify the student IDs that are present in the student snapshot 2023 unique data frame but not in the transcript 2023 data frame
+stu_ids_missing_from_transcript <- setdiff(student_snapshot_2023_unique$D_stu_id, transcript_2023$D_stu_id)
+
+# Print the number of missing IDs
+count_missing <- length(stu_ids_missing_from_transcript) %>% print()
+
+#WE HAVE NO MISSING IDS!!!
+
+#Don't need these because we don't have missing IDs
+# Create a table of the count of stu_ids_missing that have a value of C_stu_snapshot as include and exclude
+#student_snapshot_2023_unique %>% 
+  #filter(D_stu_id %in% stu_ids_missing_from_transcript) %>% 
+  #group_by(C_stu_snapshot) %>% 
+  #summarize(count_students = n_distinct(D_stu_id)) %>% 
+  #print() %>% 
+  #ungroup()
+
+## Check if anything weird is going on with these IDs by reviewing the students that are missing from transcript data that have an include flag
+#stu_ids_missing_include <- student_snapshot_2023 %>% 
+  #filter(D_stu_id %in% stu_ids_missing_from_transcript & C_stu_snapshot == "include") %>% 
+  #distinct()
+# Note that there are a couple rows with duplicates in the above
+
+# Filter to just the student IDs that we want to export (i.e., those that are not missing from the transcript data and have the include flag)
+
+## NOTE: if we want to keep students that are excluded for any reason, remove the second criteria
+included_students_2023 <- student_snapshot_2023_unique %>%
+  filter(!D_stu_id %in% stu_ids_missing_from_transcript & C_stu_snapshot == "include") %>%
+  pull(D_stu_id)
+
+#print the number of included students
+length(included_students_2023) %>% print()
+
+#Now filter the snapshot student data to just the students that we want to include
+student_snapshot_2023 <- student_snapshot_2023 %>%
+    filter(D_stu_id %in% included_students_2023)
+
+#remove those students from the list of unique IDs as well
+student_snapshot_2023_unique <- student_snapshot_2023_unique %>%
+    filter(D_stu_id %in% included_students_2023)
+
+## Check: The two counts below should be the same
+#new count of unique students
+student_snapshot_2023_unique %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+# new count of students in the overall snapshot (not unique rows)  
+student_snapshot_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+```
+
+### c. Create transcript data frame with only included students- Also Don't need to do this for Manor because we have them all included!
+
+-   **What:** Return & remove student ids that exist in 2023 transcript snapshot file but not 2023 student snapshot file
+
+-   **Check:** Number of rows at end is as expected
+
+-   **Project Team Action:** Update Snapshot Analysis Set-up table
+
+```{r}
+# KEEP the students that we want to include based on the IDs we selected in the previous step in the transcript data
+transcript_snapshot_2023 <- transcript_2023 %>%
+    filter(D_stu_id %in% included_students_2023)
+
+#compare distinct counts to make sure removed correct set of student ids (it should match the number you got in the previous step)
+transcript_snapshot_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+# Check for student IDs in transcript_snapshot_2023 not present in student_snapshot_2023_unique
+# If done correctly, the value should be zero
+missing_from_transcript <- setdiff(transcript_snapshot_2023$D_stu_id, student_snapshot_2023_unique$D_stu_id)
+
+# Check for student IDs in student_snapshot_2023_unique not present in transcript_snapshot_2023
+missing_from_student <- setdiff(student_snapshot_2023_unique$D_stu_id, transcript_snapshot_2023$D_stu_id)
+
+# Check if any missing IDs were found in transcript_snapshot_2023
+if (length(missing_from_transcript) > 0) {
+  print("There are student IDs in transcript_snapshot_2023 not present in student_snapshot_2023_unique:")
+  print(missing_from_transcript)
+} else {
+  print("All student IDs in transcript_snapshot_2023 are present in student_snapshot_2023_unique.")
+}
+
+# Check if any missing IDs were found in student_snapshot_2023_unique
+if (length(missing_from_student) > 0) {
+  print("There are student IDs in student_snapshot_2023_unique not present in transcript_snapshot_2023:")
+  print(missing_from_student)
+} else {
+  print("All student IDs in student_snapshot_2023_unique are present in transcript_snapshot_2023.")
+}
+```
+
+### d. Merge transcript 2023 and snapshot data
+
+-   **What:** Merge transcript snapshot and student snapshot data to bring in demographic info, etc.
+
+-   **Check:** Number of rows in merged file should be equal to number of rows in transcript_snapshot_2023 file since already removed students who are not in snapshot
+
+-   **Project Team Action:** Update Snapshot Analysis Set-up table
+
+```{r}
+#merge
+merged_transcript_snapshot_2023 <- left_join(transcript_snapshot_2023, student_snapshot_2023_unique, by = "D_stu_id")
+
+#count number of students
+merged_transcript_snapshot_2023 %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+#count number of included students
+merged_transcript_snapshot_2023 %>% 
+  filter(C_stu_snapshot == "include") %>% 
+  summarize(count_students = n_distinct(D_stu_id)) %>% 
+  print()
+
+```
+
+###e. Preliminary checks on student credit accumulation and enrollment - **What:** Add some preliminary checks on student credit accumulation and course enrollment here before exporting
+
+-   **Check:** Gut Check
+
+-   **Project Team Action:** Add to manual checks table
+
+```{r}
+# First lets look at overall student credit accumulation by creating buckets, and counting the distinct number of
+ student_credit_accumulation <- merged_transcript_snapshot_2023 %>%
+  group_by(`D_stu_id`) %>%
+  filter(`D_pass_fail` == "Y") %>%
+  # Summarize the number of credits earned per student per year
+  summarize(credits_earned = sum(`D_creds_earn`, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Create a new column that buckets the number of credits earned per year
+  mutate(credit_bucket = case_when(
+    credits_earned == 0 ~ "0",
+    credits_earned == 1 ~ "1",
+    credits_earned == 2 ~ "2",
+    credits_earned == 3 ~ "3",
+    credits_earned == 4 ~ "4",
+    credits_earned == 5 ~ "5",
+    credits_earned == 6 ~ "6",
+    credits_earned == 7 ~ "7",
+    credits_earned == 8 ~ "8",
+    credits_earned == 9 ~ "9",
+    TRUE ~ "10+"
+  )) %>%
+  # Summarize the number of students in each credit bucket per year
+  group_by(credit_bucket) %>%
+  summarize(students = n_distinct(D_stu_id))
+
+# View the result
+print(student_credit_accumulation)
+
+
+#create a new data frame with students who have 10+ to see what's going on
+students_10_plus <- merged_transcript_snapshot_2023 %>%
+  group_by(D_stu_id) %>%
+  filter(D_pass_fail == "Y") %>%
+  summarize(credits_earned = sum(D_creds_earn, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(credits_earned >= 10)
+
+#Now lets check overall course taking to see that it matches similarly what we would expect
+student_course_taking <- merged_transcript_snapshot_2023 %>%
+  group_by(`D_stu_id`) %>%
+  # Summarize the number of courses a student took by counting the number of unique course IDs
+  summarize(courses_taken = n_distinct(`D_course_id`)) %>%
+
+  # Create a new column that buckets the number of courses that students are taking
+  mutate(courses_taken = case_when(
+    courses_taken == 0 ~ "0",
+    courses_taken <= 5 ~ "0-5",
+    courses_taken <= 10 ~ "6-10",
+    courses_taken <= 15 ~ "11-15",
+    courses_taken <= 20 ~ "16-20",
+    TRUE ~ "20+"
+  )) %>%
+  # Summarize the number of students in each credit bucket per year
+  group_by(courses_taken) %>%
+  summarize(students = n_distinct(D_stu_id))
+
+# View the result
+print(student_course_taking)
+
+#And finally lets look at the percentage of students who took a pathway course, by first grouping by distinct student Ids, then counting the number of rows in which a student took a pathway course
+pathway_summary <- merged_transcript_snapshot_2023 %>%
+  # Ensure the student-course pairs are unique
+  group_by(D_stu_id) %>%
+  summarize(took_pathway = any(D_pathways_flag == "Y"), na_count = sum(is.na(D_pathways_flag))) %>%
+  ungroup() %>%
+  # Categorize the students based on the summary
+  mutate(category = case_when(
+    took_pathway ~ "Took at least one pathway course",
+    na_count > 0 & !took_pathway ~ "N/A",
+    TRUE ~ "Did not take any pathway course"
+  )) %>%
+  # Summarize the counts for each category
+  count(category) %>%
+  # Calculate percentages
+  mutate(percentage = n / sum(n) * 100)
+
+# Print the summary table
+print(pathway_summary)
+
+```
+
+# Part III: Export Tables / Files
+
+###a. File Cleaning - **What:** Before exporting I just want to clean up the file a little but by getting rid of some columns that we don't need and renaming some columns to be more clear
+
+-   **Check:** None really
+
+-   **Project Action:** None
+
+```{r}
+# Move the D_course_id column to appear right after the D_course_name column
+merged_transcript_snapshot_2023 <- merged_transcript_snapshot_2023 %>%
+  select(D_stu_id,D_course_name.x, D_course_id, everything())
+
+# Print the updated data frame
+print(merged_transcript_snapshot_2023)
+
+```
+
+###b. Export Files
+
+-   **What:** The below exports all your check tables to an excel file in the folder path you set above
+
+-   **Check:** look at your data in the environment after running the code block below and be sure that all your variables have the follow the standard naming convention (D tag, lower case, underscores)
+
+-   **Project Action:** Optional - change the file name
+
+```{r}
+#save merged files for next phase
+# Get today's date
+current_date <- format(Sys.Date(), "%m.%d.%y") # will update with the date it was last run
+
+# Write dataframe to Excel file with today's date included in the filename
+write.xlsx(merged_transcript_snapshot_2023,
+           file = paste0(full_file_path, "/3_merged_transcript_snapshot_", current_date, ".xlsx"),
+           rowNames = FALSE)
+```

@@ -1,0 +1,375 @@
+---
+title: "ADMIN- Fake Transcript Data Creation"
+author: "Zach Friedman"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3   # Customize the depth of the table of contents for HTML document
+    toc_float:
+      collapsed: true    # Start with the table of contents expanded
+      smooth_scroll: true  # Enable smooth scrolling
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+  output_dir = "knitted files", output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part 0: Read Libraries and connect to Sharepoint
+
+### 0.1 (OPTIONAL) Install the latest version of the erstools library!
+
+**ACTION: If you aren't sure if you have the most up to date release of erstools, follow these instructions: https://app.tettra.co/teams/ersknowledge/pages/updating-erstools-functions-markdown-template**
+
+### 0.2 Read All Libraries
+
+**ACTION: Run the code and read the comments for different functions you will have access to**
+
+```{r, warning = F, message = F}
+#ERS-specific functions!!
+library(erstools) #includes functions like ers_read_sharepoint, ers_write_sharepoint, ers_table, and ers_column_info
+
+#load data
+library(Microsoft365R) # Use Microsoft365R to connect to SharePoint and load files
+library(readxl) # Functions for reading Excel files: read_excel
+library(writexl) # Functions for writing Excel files: write_xlsx
+library(openxlsx) # Functions for writing Excel files: write.xlsx
+
+#manipulate data
+library(tidyverse) # Includes ggplot2, dplyr, tidyr, readr, etc.
+library(data.table) # fread(): load large CSVs quickly
+library(janitor) # Functions for cleaning and examining data: clean_names() instantly formats all column names
+library(safejoin) # Provides safer join operations for 1:many matching - safe_left_join()
+library(stringr) # str_detect(): pattern matching using regular expressions (see regex101.com)
+
+#format and display data
+library(scales) # Functions for scaling and formatting axes in plots: comma(), percent()
+library(gt) # Creates and formats tables in a publication-ready format: gt()
+library(flextable) # Creates and formats tables in a publication-ready format: flextable()
+library(extrafont) # Manages and uses custom fonts in plots - loadfonts(): Loads fonts available on the system
+
+#share output with supervisor
+library(rmarkdown) # needed to create knitted files in output folder
+library(downloadthis) # create download buttons in your knitted file so that a supervisor can download data in Excel!
+```
+
+## Part 1: Create Fake Data
+
+### 1.0 Authenticate to sharepoint to be able to read in files
+
+**ACTION: After running the code, you may need to look at your console code window below for instructions to log in. A window may open in your browser to ask you to log into Microsoft to confirm your identity**
+
+**NOTE: If you ever have authentication issues, first run this in your console then try running the code chunk below again - AzureAuth::clean_token_directory()**
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+### 1.1 Create Fake Student Data
+```{r}
+library(tidyverse)
+library(lubridate)
+
+set.seed(42)  # for reproducibility
+
+# Generate 100 unique 8-digit student IDs
+n_students <- 100
+student_ids <- sample(1e7:1e8 - 1, n_students)
+
+# Possible values
+school_years <- c(2024, 2023, 2022)
+grades <- c(9, 10, 11, 12, 13)
+statuses <- c("Active", "Graduated", "Transferred", "Dropped Out")
+school_ids <- 1:5
+exit_codes <- c("Graduated", "Transferred", "Dropped Out")
+exit_descriptions <- c("Graduated", "Transferred or Dropped")
+races <- c("Asian", "Native Hawaiian", "Black", "White", "Hispanic", "Two or More")
+
+# Probabilities for race
+race_probs <- c(0.5, 0.2, 0.1, 0.1, 0.05, 0.05)
+
+# Create rows for each student (some will have multiple rows)
+rows_per_student <- sample(1:3, n_students, replace = TRUE)
+
+fake_data <- map2_dfr(student_ids, rows_per_student, function(id, n_rows) {
+  map_dfr(1:n_rows, function(i) {
+    school_year <- sample(school_years, 1, prob = ifelse(school_years == 2024, 0.7, 0.15))
+    grade <- sample(grades, 1, prob = c(rep(0.225, 4), 0.1))  # favor 9–12
+    status <- sample(statuses, 1)
+    school_id <- sample(school_ids, 1)
+    
+    # Entry/exit dates
+    entry_date <- if (runif(1) > 0.1) ymd("2023-08-31") else sample(seq(ymd("2023-09-01"), ymd("2024-01-31"), by = "day"), 1)
+    exit_date <- if (runif(1) > 0.1) ymd("2024-06-21") else sample(seq(ymd("2024-01-01"), ymd("2024-06-01"), by = "day"), 1)
+    
+    exit_code <- sample(exit_codes, 1)
+    exit_description <- ifelse(exit_code == "Graduated", "Graduated", "Transferred or Dropped")
+    
+    tibble(
+      Masked_Student_ID = id,
+      School_Year = school_year,
+      Stu_Grade = grade,
+      Stu_Enrollment_Status = status,
+      Stu_School_ID = school_id,
+      Stu_Entry_Date = entry_date,
+      Stu_Exit_Date = exit_date,
+      Stu_Exit_Code = exit_code,
+      Stu_Exit_Code_Description = exit_description,
+      Stu_SWD_flag = sample(c("Y", "N"), 1),
+      Stu_ELL_flag = sample(c("Y", "N"), 1),
+      Stu_FRL_flag = sample(c("Y", "N"), 1),
+      Stu_Race = sample(races, 1, prob = race_probs)
+    )
+  })
+})
+
+# View first few rows
+print(head(fake_data))
+
+
+#create mapping for shcool IDs to names 1-5
+school_id_mapping <- tibble(
+  Stu_School_ID = 1:5,
+  School_Name = c("Waikea High School", "Hilo High School", "Konawaena HS", "Kamehameha High", "Hawaii Preparatory Academy")
+)
+
+#add school names to data
+student_data <- fake_data %>%
+  left_join(school_id_mapping, by = "Stu_School_ID")
+
+
+
+```
+
+###1.2 Create Fake Transcript Data
+
+```{r}
+# Assume you already have `student_data` from the prior code with columns:
+# Masked_Student_ID, Stu_School_ID, School_Year, Stu_Grade
+
+set.seed(42)
+
+# Define course catalog
+course_catalog <- tribble(
+  ~Crs_ID,   ~Crs_Name,                     ~Crs_Subject,
+  "ENG101", "English 9",                    "English",
+  "ENG201", "English 10",                   "English",
+  "MAT101", "Algebra I",                    "Math",
+  "MAT201", "Geometry",                     "Math",
+  "SCI101", "Biology",                      "Science",
+  "SCI201", "Chemistry",                    "Science",
+  "SOC101", "World History",                "Social Studies",
+  "SOC201", "US History",                   "Social Studies",
+  "PE101",  "Physical Education",           "PE",
+  "ART101", "Intro to Art",                 "Arts",
+  "MUS101", "Ukulele Ensemble",             "Music",
+  "HAW101", "Hawaiian Language I",          "World Language",
+  "HAW201", "Hawaiian Language II",         "World Language",
+  "BUS101", "Intro to Business",            "CTE",
+  "CUL101", "Culinary Arts",                "CTE",
+  "AG101",  "Agricultural Science",         "CTE",
+  "MAR101", "Marine Biology",               "Science",
+  "TECH101","Digital Media",                "Technology",
+  "LIT101", "Pacific Islander Literature",  "English",
+  "ENV101", "Environmental Science",        "Science",
+  "DAN101", "Hula Dance",                   "Arts",
+  "ADV100", "Advisory",                     "Advisory"
+)
+
+# Location lookup
+location_lookup <- tribble(
+  ~Detailed_Location, ~Detailed_Location_Desc,
+  "1001", "Waikea High School",
+  "1002", "Hilo High School",
+  "1003", "Konawaena HS",
+  "1004", "Kamehameha High",
+  "1005", "Hawaii Preparatory Academy"
+)
+
+# Function to create transcript rows for a student
+generate_courses_for_student <- function(stu_id, grade, loc_id, year) {
+  # Select 5 random courses + 1 advisory
+  core_courses <- course_catalog %>% 
+    filter(Crs_Name != "Advisory") %>% 
+    slice_sample(n = 5)
+  
+  advisory <- course_catalog %>% filter(Crs_Name == "Advisory")
+  
+  courses <- bind_rows(core_courses, advisory)
+  
+  # Generate transcript rows
+  courses %>%
+    mutate(
+      Stu_ID1 = stu_id,
+      Stu_Grade_Level = grade,
+      Empl_ID_Tchr1 = sample(100000:999999, n(), replace = TRUE),
+      Detailed_Location = loc_id,
+      Detailed_Location_Desc = location_lookup$Detailed_Location_Desc[match(loc_id, location_lookup$Detailed_Location)],
+      Class_ID = paste0(Crs_ID, "_", stu_id, "_", row_number()),
+      Section = sample(1:5, n(), replace = TRUE),
+      `Crs_Credit Recovery` = sample(c("Y", "N"), n(), prob = c(0.1, 0.9), replace = TRUE),
+      Term = sample(c("Full Year", "Fall", "Spring"), n(), replace = TRUE),
+      SchoolYr = year,
+      Stu_Grade_Outcome = sample(c("A", "B", "C", "D", "F", "U", "Pass"), n(), replace = TRUE),
+      Nbr_Credits_Possible = ifelse(Crs_Name == "Advisory", 0, sample(c(0.5, 1.0), n(), replace = TRUE)),
+      Stu_Credits_Earned = ifelse(Stu_Grade_Outcome %in% c("A", "B", "C", "Pass"), Nbr_Credits_Possible, 0),
+      GPA_Points_Unweighted = ifelse(Crs_Name == "Advisory", 0, round(runif(n(), 0, 4), 2)),
+      GPA_Points_Weighted = round(GPA_Points_Unweighted + ifelse(Crs_Subject %in% c("Math", "Science", "English"), 0.5, 0), 2),
+      GPA_Added_Value = GPA_Points_Weighted - GPA_Points_Unweighted
+    )
+}
+
+# Generate full dataset
+transcript_data <- student_data %>%
+  select(Masked_Student_ID, Stu_School_ID, Stu_Grade, School_Year) %>%
+  pmap_dfr(~generate_courses_for_student(..1, ..3, ..2, ..4))
+
+# View a sample
+head(transcript_data)
+
+
+
+```
+
+### 1.3 Create Fake HR Data
+```{r}
+# Assuming transcript_df already exists with a column `Empl_ID_Tchr1`
+set.seed(123)  # for reproducibility
+
+# Get unique teacher IDs from transcript data
+teacher_ids <- unique(transcript_data$Empl_ID_Tchr1)
+
+# Define possible race categories (mirroring student data)
+race_categories <- c("Asian", "Native Hawaiian", "White", "Black", "Hispanic", "Two or More")
+
+# Define degree levels
+edu_levels <- c("BA", "MA", "MA+", "PhD")
+edu_level_desc <- c("Bachelor's", "Master's", "Master's Plus", "Doctorate")
+
+# Define subjects for certification
+subjects <- c("Math", "Science", "English", "Social Studies", "PE", "Music", "Hawaiian Language", "Special Education", "CTE", "Art")
+
+# Create HR dataset
+hr_df <- data.frame(
+  Empl_ID_Tchr1 = teacher_ids,
+  Empl_Race = sample(race_categories, length(teacher_ids), replace = TRUE, prob = c(0.5, 0.2, 0.1, 0.1, 0.05, 0.05)),
+  Empl_FTE = sample(c(1, 0.8, 0.6, 0.5), length(teacher_ids), replace = TRUE, prob = c(0.9, 0.05, 0.03, 0.02)),
+  Yrs_In_Position = sample(1:15, length(teacher_ids), replace = TRUE),
+  Yrs_In_Scl = sample(1:20, length(teacher_ids), replace = TRUE),
+  Yrs_Tching_Exp = sample(1:30, length(teacher_ids), replace = TRUE)
+)
+
+# Add education levels and descriptions
+hr_df <- hr_df %>%
+  mutate(
+    Edu_Level = sample(edu_levels, n(), replace = TRUE),
+    Edu_Level_Desc = case_when(
+      Edu_Level == "BA" ~ "Bachelor's",
+      Edu_Level == "MA" ~ "Master's",
+      Edu_Level == "MA+" ~ "Master's Plus",
+      Edu_Level == "PhD" ~ "Doctorate"
+    )
+  )
+
+# Add certification info
+hr_df <- hr_df %>%
+  mutate(
+    Degree_Subject = sample(subjects, n(), replace = TRUE),
+    Cert_Subject_Code = str_sub(Degree_Subject, 1, 3) %>% toupper(),
+    Cert_Subject_Desc = Degree_Subject,
+    Cert_Type_Code = sample(c("P", "I", "T"), n(), replace = TRUE),  # Provisional, Initial, Temporary
+    Cert_Type_Desc = case_when(
+      Cert_Type_Code == "P" ~ "Provisional",
+      Cert_Type_Code == "I" ~ "Initial",
+      Cert_Type_Code == "T" ~ "Temporary"
+    ),
+    Addl_Cert_Subj_Code = ifelse(runif(n()) < 0.3, str_sub(sample(subjects, n(), replace = TRUE), 1, 3) %>% toupper(), ""),
+    Addl_Cert_Subj_Desc = ifelse(Addl_Cert_Subj_Code != "", sample(subjects, n(), replace = TRUE), ""),
+    Nat_Board_Cert_Status = sample(c("Certified", "Not Certified"), n(), replace = TRUE, prob = c(0.7, 0.3))
+  )
+
+# View a few rows
+head(hr_df)
+
+
+
+
+```
+
+
+## Part 5: Upload File to Sharepoint
+
+### 5.1 Set output data folder Path
+
+**ACTION: Change the processed_data_folder_path to the path to your data. The folder path must start with a folder that is just below the "Client Work" level. For example, it should start with "District Partners", "Internal", "State Partners", etc..**
+
+```{r}
+processed_data_folder_path <- "Core Services/Strategy & Innovation/Data Strategy & Innovation/3. R Stuff/Transcript Templatization (2024)"
+```
+
+
+### 5.2 See guidance on using the "ers_write_sharepoint" function
+
+**ACTION: Run the code below to see documentation on our custom function!**
+
+```{r, eval = interactive()}
+?ers_write_sharepoint
+```
+
+### 5.3 Write files
+
+**ACTION: Replace "raw_data" with your desired name of your data and replace "XXX.csv" with the desired name of your output file. You can output CSV or XLSX files**
+
+```{r}
+#student data
+ers_write_sharepoint(data = student_data,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "HPS_Student_Data.csv",
+                     drive_name = "internal_drive")
+
+#transcript data
+ers_write_sharepoint(data = transcript_data,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "HPS_Transcript_Data.csv",
+                     drive_name = "internal_drive")
+
+#Hr data
+ers_write_sharepoint(data = hr_df,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "HPS_HR_Data.csv",
+                     drive_name = "internal_drive")
+```
+
+## Part 6: Knit the file into a nicely formatted HTML that you can share with teammates!
+
+**ACTION: ALL YOU NEED TO DO IS Use Ctrl+Shift+K to knit your file, and it will upload an html file to your Github repo in a folder called "knitted files"!**
+
+## OPTIONAL Part 7: Upload knitted file to Sharepoint
+
+**ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
+
+```{r eval = FALSE}
+# You can change the destination path of your knitted file here if you wish
+destination_of_knitted_file <- processed_data_folder_path
+
+# Define the path to the current R Markdown file
+current_file <- rstudioapi::getActiveDocumentContext()$path
+
+# Determine the output directory and file name for the knitted HTML
+output_dir <- dirname(current_file)
+output_file <- gsub(" ", "-", paste0(tools::file_path_sans_ext(basename(current_file)), ".html"))
+knitted_file <- file.path(output_dir, "knitted files", output_file)
+
+
+client_work_drive <- orgfiles_site$get_drive("Client Work")
+
+client_work_drive$upload_file(knitted_file, dest = file.path(destination_of_knitted_file, output_file))
+```
+
+
