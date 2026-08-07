@@ -1,0 +1,940 @@
+---
+title: "April 2026 Follow On Analysis"
+author: "Zach Friedman"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3   # Customize the depth of the table of contents for HTML document
+    toc_float:
+      collapsed: true    # Start with the table of contents expanded
+      smooth_scroll: true  # Enable smooth scrolling
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding,
+  output_dir = "knitted files", output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Part 0: Read Libraries and connect to Sharepoint
+
+```{r}
+erstools::ers_load_packages()
+options(scipen = 99) #prevent any numbers from showing up as scientific notation
+```
+
+```{r}
+#set sharepoint site URL for access to our org-wide files
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+#access sharepoint site URL you may be prompted to sign in here
+orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+```
+
+## 1.1 Set your folder path(s) and read in your data
+
+
+```{r}
+raw_data_folder_path <-  "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/April 2026 Follow On"
+
+
+cohort_analysis_dataframe <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = "cohort_analysis_dataframe_April_2026.csv",
+  drive_name = "client_work_drive"
+)
+
+stu_transcript_rollup <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = "stu_transcript_rollup_April_2026.csv",
+  drive_name = "client_work_drive"
+)
+
+```
+
+# Part 2: Analysis
+
+```{r}
+#Using stu_transcript_rollup, calculate the percenatge of students in the cohort who ever took at least 1 EPSO course
+stu_transcript_rollup %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_with_epsos = n_distinct(
+      D_stu_id[C_course_EPSO_no_IC == "TRUE" & C_course_failed == "Not Failed"]
+    ),
+    pct_students_with_epsos = num_students_with_epsos / num_students
+  )
+
+#79%
+
+#using cohort_analysis_dataframe, how many students in the therapeutic services pathway at John Overton?
+cohort_analysis_dataframe %>%
+  filter(
+   pathway == "Therapeutic Services" &
+      C_four_year_home_school == "John Overton High"
+  ) %>%
+  summarise(num_students = n_distinct(D_stu_id))
+
+#98, and how many of those students ever took a WBL course ('WBL?' = YES)
+cohort_analysis_dataframe %>%
+  filter(
+    pathway == "Therapeutic Services" &
+      C_four_year_home_school == "John Overton High"
+  ) %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_with_wbl = n_distinct(D_stu_id[`WBL?` == "YES"]),
+    pct_students_with_wbl = num_students_with_wbl / num_students
+  )
+
+#Its saying 38%, can I see what those courses are/were?
+cohort_analysis_dataframe %>%
+  filter(
+    pathway == "Therapeutic Services" &
+      C_four_year_home_school == "John Overton High" &
+      `WBL?` == "YES"
+  ) %>%
+  select(D_stu_id, C_pathway_course_name) %>%
+  distinct()
+
+
+#great, its real!
+
+#and same thing for Glencliff
+cohort_analysis_dataframe %>%
+  filter(
+    pathway == "Therapeutic Services" &
+      C_four_year_home_school == "Glencliff High School"
+  ) %>%
+  summarise(num_students = n_distinct(D_stu_id))
+
+cohort_analysis_dataframe %>%
+  filter(
+    pathway == "Therapeutic Services" &
+      C_four_year_home_school == "Glencliff High School"
+  ) %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_with_wbl = n_distinct(D_stu_id[`WBL?` == "YES"]),
+    pct_students_with_wbl = num_students_with_wbl / num_students
+  )
+
+#what were those classes
+cohort_analysis_dataframe %>%
+  filter(
+    pathway == "Therapeutic Services" &
+      C_four_year_home_school == "Glencliff High School" &
+      `WBL?` == "YES"
+  ) %>%
+  select(D_stu_id, C_pathway_course_name) %>%
+  distinct()
+
+#Using stu_transcript_rollup, how many students in the cohort stayed at the same AON school all 4 years (C_transfered_within_school_flag = n, all rows and C_trassfered_across_school flag= n, all rows)
+
+trasnfer_numbers <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    transferred_within_school = sum(C_transfered_within_year_flag == "Y"),
+    transferred_across_school = sum(C_transferred_across_years_flag == "Y")
+  ) %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_no_transfers = n_distinct(D_stu_id[transferred_within_school == 0 & transferred_across_school == 0]),
+    pct_students_no_transfers = num_students_no_transfers / num_students
+  ) %>% 
+  print()
+
+#Okay so 1599, or 69% of the cohort never trasnffered
+
+#How many distinct students were ever Y just for C_transferred_across_years_flag
+stu_transcript_rollup %>%
+  filter(C_transferred_across_years_flag == "Y") %>%
+  summarise(num_students_transferred_across_years = n_distinct(D_stu_id))
+
+#And how many ever within year
+stu_transcript_rollup %>%
+  filter(C_transfered_within_year_flag == "Y") %>%
+  summarise(num_students_transferred_within_year = n_distinct(D_stu_id))
+
+#looking at the by school by pathway level using the cohort_analysis_dataframe, what is the number of unique courses by school by pathway, valid_combos only?
+courses_per_pathway_school <- cohort_analysis_dataframe %>%
+  filter(C_pure_cohort == "Y" & valid_combo == "TRUE" & include_flag == "Include") %>%
+  group_by(C_four_year_home_school, pathway) %>%
+  summarise(num_unique_courses = n_distinct(course_id)) %>%
+  print()
+
+#okay what are the possible values for valid_combo?
+unique(cohort_analysis_dataframe$valid_combo)
+
+
+
+#what is the average?
+average_courses_per_pathway_per_school <- cohort_analysis_dataframe %>%
+  filter(C_pure_cohort == "Y" & valid_combo == "TRUE" & include_flag == "Include") %>%
+  group_by(C_four_year_home_school, pathway) %>%
+  summarise(num_unique_courses = n_distinct(course_id)) %>%
+  ungroup() %>%
+  summarise(average_unique_courses = mean(num_unique_courses)) %>%
+  print()
+
+#how many unique pathway and school combinations had only 3 (or fewer) courses
+num_pathway_school_combos_fewer_than_4_courses <- cohort_analysis_dataframe %>%
+  filter(C_pure_cohort == "Y" & valid_combo == "TRUE" & include_flag == "Include") %>%
+  group_by(C_four_year_home_school, pathway) %>%
+  summarise(num_unique_courses = n_distinct(course_id)) %>%
+  ungroup() %>%
+  summarise(num_combos_fewer_than_4_courses = sum(num_unique_courses <= 3)) %>%
+  print()
+
+#out of how many total?
+total_pathway_school_combos <- cohort_analysis_dataframe %>%
+  filter(C_pure_cohort == "Y" & valid_combo == "TRUE" & include_flag == "Include") %>%
+  group_by(C_four_year_home_school, pathway) %>%
+  summarise(num_unique_courses = n_distinct(course_id)) %>%
+  ungroup() %>%
+  summarise(total_combos = n()) %>%
+  print()
+
+#104/180, I am a little suspicious. Lets look at Antioch- do any of the rows for Antioch at the pathway level say that interdisciplinary science and research should be included?
+
+#Pure cohort is 24/82
+
+
+#Okay lets move to UTK-
+#how many students took at least 2 credits of a foreign language (using stu_transcript_rollup, C_course_subject_area == World Language, sum D_creds_earn by unique D_stu_id)
+foreign_language <- stu_transcript_rollup %>%
+  filter(C_course_subject_area == "World Language") %>%
+  group_by(D_stu_id) %>%
+  summarise(total_foreign_language_creds = sum(D_creds_earn)) %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_at_least_2_creds = n_distinct(D_stu_id[total_foreign_language_creds >= 2]),
+    pct_students_at_least_2_creds = num_students_at_least_2_creds / num_students
+  ) %>%
+  print()
+
+#2069 out of 2306, so 90%
+
+#Lets give those students a flag (new column) for whether they took at least 2 credits of a foreign language or not
+stu_transcript_rollup <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  mutate(total_foreign_language_creds = sum(D_creds_earn[C_course_subject_area == "World Language"])) %>%
+  ungroup() %>%
+  mutate(at_least_2_creds_foreign_language_flag = ifelse(total_foreign_language_creds >= 2, "Y", "N")) %>%
+  select(-total_foreign_language_creds) %>% #remove the intermediate column if you don't need it
+  print()
+
+#how many students have taken 4 years of Math and ELA (group by D_stu_id, check for C_course_subject_area == Math, count number of distinct years, same for ELA, for minimum of 4)
+math_ela_4_years <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    math_years = n_distinct(D_year[C_course_subject_area == "Math"]),
+    ela_years = n_distinct(D_year[C_course_subject_area == "English"]),
+    .groups = "drop"
+  ) %>%
+  summarise(
+    num_students = n(),
+    num_students_4_years_math = sum(math_years >= 4),
+    num_students_4_years_ela = sum(ela_years >= 4),
+    pct_students_4_years_math = num_students_4_years_math / num_students,
+    pct_students_4_years_ela = num_students_4_years_ela / num_students
+  ) %>%
+  print()
+
+
+
+#Can we make a flag for this similar to world language
+stu_transcript_rollup <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  mutate(
+    math_years = n_distinct(D_year[C_course_subject_area == "Math"]),
+    ela_years = n_distinct(D_year[C_course_subject_area == "English"]),
+    at_least_4_years_math_flag = ifelse(math_years >= 4, "Y", "N"),
+    at_least_4_years_ela_flag = ifelse(ela_years >= 4, "Y", "N")
+  ) %>%
+  ungroup() %>%
+  select(-math_years, -ela_years)
+
+#what percent met BOTH Math and ELA
+math_ela_both <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    at_least_4_years_math = any(at_least_4_years_math_flag == "Y"),
+    at_least_4_years_ela = any(at_least_4_years_ela_flag == "Y")
+  ) %>%
+  summarise(
+    num_students = n(),
+    num_students_both = sum(at_least_4_years_math & at_least_4_years_ela),
+    pct_students_both = num_students_both / num_students
+  ) %>%
+  print()
+
+#2059/2306, so 89%
+
+#This one is a little harder, how many students took courses containing "Biology", "Chemistry", and "Physics" in the title (C_course_name), they had to have taken all 3
+science_courses <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    took_biology = any(str_detect(C_course_name_clean, regex("Biology", ignore_case = TRUE))),
+    took_chemistry = any(str_detect(C_course_name_clean, regex("Chemistry", ignore_case = TRUE))),
+    took_physics = any(str_detect(C_course_name_clean, regex("Physics", ignore_case = TRUE)))
+  ) %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_all_3_sciences = n_distinct(D_stu_id[took_biology & took_chemistry & took_physics]),
+    pct_students_all_3_sciences = num_students_all_3_sciences / num_students
+  ) %>%
+  print()
+
+#123/2306, just 5%
+
+#Similarly, how many students ever took Statistics or Calculus
+stats_calculus <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    took_statistics = any(str_detect(C_course_name_clean, regex("Statistics", ignore_case = TRUE))),
+    took_calculus = any(str_detect(C_course_name_clean, regex("Calculus", ignore_case = TRUE)))
+  ) %>%
+  summarise(
+    num_students = n_distinct(D_stu_id),
+    num_students_stats_or_calculus = n_distinct(D_stu_id[took_statistics | took_calculus]),
+    pct_students_stats_or_calculus = num_students_stats_or_calculus / num_students
+  ) %>%
+  print()
+
+#657/2306 or 29%
+
+#and give those students a flag
+stu_transcript_rollup <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  mutate(
+    took_biology = any(str_detect(C_course_name_clean, regex("Biology", ignore_case = TRUE))),
+    took_chemistry = any(str_detect(C_course_name_clean, regex("Chemistry", ignore_case = TRUE))),
+    took_physics = any(str_detect(C_course_name_clean, regex("Physics", ignore_case = TRUE))),
+    took_statistics = any(str_detect(C_course_name_clean, regex("Statistics", ignore_case = TRUE))),
+    took_calculus = any(str_detect(C_course_name_clean, regex("Calculus", ignore_case = TRUE))),
+    took_all_3_sciences_flag = ifelse(took_biology & took_chemistry & took_physics, "Y", "N"),
+    took_stats_or_calculus_flag = ifelse(took_statistics | took_calculus, "Y", "N")
+  ) %>%
+  ungroup() %>%
+  select(-took_biology, -took_chemistry, -took_physics, -took_statistics, -took_calculus) %>%
+  print()
+
+#okay, now putting all of those together using the flags, how many students are Y for two credits of foreign language, 4 years of math, 4 years of ELA, all 3 sciences, and stats or calculus?
+all_flags <- stu_transcript_rollup %>%
+  group_by(D_stu_id) %>%
+  summarise(
+    at_least_2_creds_foreign_language_flag = any(at_least_2_creds_foreign_language_flag == "Y", na.rm = TRUE),
+    at_least_4_years_math_flag            = any(at_least_4_years_math_flag == "Y", na.rm = TRUE),
+    at_least_4_years_ela_flag             = any(at_least_4_years_ela_flag == "Y", na.rm = TRUE),
+    took_all_3_sciences_flag              = any(took_all_3_sciences_flag == "Y", na.rm = TRUE),
+    took_stats_or_calculus_flag           = any(took_stats_or_calculus_flag == "Y", na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  summarise(
+    num_students = n(),
+    num_students_all_flags = sum(
+      at_least_2_creds_foreign_language_flag &
+      at_least_4_years_math_flag &
+      at_least_4_years_ela_flag &
+      took_all_3_sciences_flag &
+      took_stats_or_calculus_flag,
+      na.rm = TRUE
+    ),
+    pct_students_all_flags = num_students_all_flags / num_students
+  )
+
+print(all_flags)
+
+#20/2306 lol so less than 1% of students met all of those criteria
+
+```
+
+# Part 3: SPLASH
+```{r}
+#I want to make a large table that lists all of the EPSO courses (non IC) offered by school and pathway. So Column one would be the school name, column 2 would be the pathway name (Valid combo's only) and then column 3 would be all uinque EPSO courses in that pathway. Then, I want a column that counts the total number of unique students in that pathway at that school (so it will be duplicative across rows), and a column that show sthe number of students enrolled in that specific course, and then a column that calculates the % of students in that pathway who enrolled in that course.
+# Step 1: Total students in each pathway at each school
+pathway_totals <- cohort_analysis_dataframe %>%
+  filter(
+    valid_combo == "TRUE",
+    include_flag == "Include"
+  ) %>%
+  group_by(C_four_year_home_school, pathway) %>%
+  summarise(
+    num_students_in_pathway = n_distinct(D_stu_id),
+    .groups = "drop"
+  )
+
+# Step 2: EPSO course enrollment counts
+course_counts <- cohort_analysis_dataframe %>%
+  filter(
+    valid_combo == "TRUE",
+    include_flag == "Include",
+    C_course_EPSO_no_IC == "TRUE",
+    !is.na(C_course_name_clean)
+  ) %>%
+  group_by(
+    C_four_year_home_school,
+    pathway,
+    C_course_name_clean
+  ) %>%
+  summarise(
+    num_students_in_course = n_distinct(D_stu_id),
+    .groups = "drop"
+  )
+
+# Step 3: Join and calculate percentages
+pathway_school_table <- course_counts %>%
+  left_join(
+    pathway_totals,
+    by = c("C_four_year_home_school", "pathway")
+  ) %>%
+  mutate(
+    pct_students_in_course =
+      num_students_in_course / num_students_in_pathway
+  ) %>%
+  arrange(
+    C_four_year_home_school,
+    pathway,
+    desc(num_students_in_course)
+  )
+
+print(pathway_school_table)
+
+
+
+```
+# Part 4: Testing Shiny
+```{r}
+install.packages(c(
+  "shiny",
+  "tidyverse",
+  "DT",
+  "gt",
+  "reactable"
+))
+```
+
+
+
+# Step 2: Full app.R Script
+
+```{r}
+library(shiny)
+library(tidyverse)
+library(DT)
+library(gt)
+library(reactable)
+library(htmltools)
+
+#============================
+# LOAD DATA
+#============================
+
+pathway_data <- pathway_data %>%
+  filter(!is.na(pathway))
+
+#============================
+# MNPS BRAND PALETTE
+#============================
+mnps_navy   <- "#0A2240"
+mnps_gold   <- "#FFC629"
+mnps_light  <- "#F5F1E8"
+mnps_blue   <- "#4A6FA5"
+
+#============================
+# UI
+#============================
+
+ui <- fluidPage(
+
+  # ---- Google Fonts + custom CSS ----
+  tags$head(
+    tags$link(
+      href = "https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Open+Sans:wght@400;600;700&display=swap",
+      rel = "stylesheet"
+    ),
+    tags$style(HTML(sprintf("
+      body {
+        font-family: 'Open Sans', sans-serif;
+        background-color: %s;
+        color: #222;
+      }
+      .mnps-header {
+        background: linear-gradient(135deg, %s 0%%, #143058 100%%);
+        color: white;
+        padding: 28px 36px;
+        margin: -15px -15px 24px -15px;
+        border-bottom: 6px solid %s;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+      }
+      .mnps-header h1 {
+        font-family: 'Merriweather', serif;
+        font-weight: 900;
+        font-size: 30px;
+        margin: 0;
+        letter-spacing: 0.3px;
+      }
+      .mnps-header .subtitle {
+        font-size: 14px;
+        opacity: 0.85;
+        margin-top: 6px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+      }
+      .well {
+        background-color: white;
+        border: 1px solid #e0ddd4;
+        border-top: 4px solid %s;
+        border-radius: 6px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        padding: 20px;
+      }
+      .control-label {
+        font-weight: 700;
+        color: %s;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 8px;
+      }
+      .checkbox label {
+        font-weight: 400 !important;
+        text-transform: none !important;
+        letter-spacing: 0 !important;
+        font-size: 14px;
+        color: #333;
+      }
+      h3.section-title {
+        font-family: 'Merriweather', serif;
+        font-weight: 700;
+        color: %s;
+        font-size: 20px;
+        padding-bottom: 10px;
+        margin-top: 28px;
+        margin-bottom: 16px;
+        border-bottom: 2px solid %s;
+      }
+      h3.section-title .visual-tag {
+        display: inline-block;
+        background-color: %s;
+        color: %s;
+        font-family: 'Open Sans', sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 3px;
+        margin-right: 10px;
+        vertical-align: middle;
+        letter-spacing: 1px;
+      }
+      .panel-card {
+        background: white;
+        border-radius: 6px;
+        padding: 20px 24px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        margin-bottom: 20px;
+        border-left: 4px solid %s;
+      }
+      .panel-card .helper-text {
+        color: #666;
+        font-size: 13px;
+        margin: -6px 0 14px 0;
+        font-style: italic;
+      }
+      .reactable {
+        font-family: 'Open Sans', sans-serif;
+        font-size: 13.5px;
+      }
+    ",
+    mnps_light, mnps_navy, mnps_gold, mnps_gold,
+    mnps_navy, mnps_navy, mnps_gold, mnps_gold, mnps_navy,
+    mnps_navy)))
+  ),
+
+  div(class = "mnps-header",
+      h1("MNPS Principal SPLASH Review Tool"),
+      div(class = "subtitle", "Metro Nashville Public Schools  •  Early Post-Secondary Outcome Analysis")
+  ),
+
+  sidebarLayout(
+
+    sidebarPanel(
+      width = 3,
+
+      selectInput(
+        inputId  = "school_select",
+        label    = "Select Your School",
+        choices  = sort(unique(pathway_data$C_four_year_home_school)),
+        selected = unique(pathway_data$C_four_year_home_school)[1]
+      ),
+
+      uiOutput("pathway_selector")
+    ),
+
+    mainPanel(
+
+      div(class = "panel-card",
+          h3(class = "section-title",
+             span(class = "visual-tag", "VISUAL 1"),
+             "EPSO Offerings at Your School"),
+          reactableOutput("epso_table")
+      ),
+
+      div(class = "panel-card",
+          h3(class = "section-title",
+             span(class = "visual-tag", "VISUAL 2"),
+             "Comparison to Other Schools Offering Same Pathways"),
+          reactableOutput("comparison_table")
+      ),
+
+      div(class = "panel-card",
+          h3(class = "section-title",
+             span(class = "visual-tag", "VISUAL 3"),
+             "Courses Offered Elsewhere But Not at Your School"),
+          div(class = "helper-text",
+              "Within your selected pathways, these are EPSO courses that other MNPS schools offer but your school does not currently offer."),
+          uiOutput("gap_output")
+      )
+    )
+  )
+)
+
+#============================
+# SERVER
+#============================
+
+server <- function(input, output, session) {
+
+  pathway_colors <- c(
+    "Business"               = "#D9E2EC",
+    "Health Sciences"        = "#CFE2F3",
+    "Information Technology" = "#E8DCC4",
+    "Engineering"            = "#FFE9A8",
+    "Arts"                   = "#E5D4E3"
+  )
+
+  output$pathway_selector <- renderUI({
+    available_pathways <- pathway_data %>%
+      filter(C_four_year_home_school == input$school_select) %>%
+      pull(pathway) %>%
+      unique() %>%
+      sort()
+
+    selected_pathways <- input$pathway_select
+    if (is.null(selected_pathways)) {
+      selected_pathways <- available_pathways
+    } else {
+      selected_pathways <- selected_pathways[selected_pathways %in% available_pathways]
+    }
+
+    checkboxGroupInput(
+      inputId  = "pathway_select",
+      label    = "Select Pathways",
+      choices  = available_pathways,
+      selected = selected_pathways
+    )
+  })
+
+  school_filtered <- reactive({
+    req(input$school_select, input$pathway_select)
+    pathway_data %>%
+      filter(
+        C_four_year_home_school == input$school_select,
+        pathway %in% input$pathway_select
+      )
+  })
+
+  #---------------------------------
+  # VISUAL 1
+  #---------------------------------
+  output$epso_table <- renderReactable({
+
+    table_data <- school_filtered() %>%
+      group_by(pathway) %>%
+      arrange(desc(pct_students_in_course), .by_group = TRUE) %>%
+      ungroup() %>%
+      mutate(
+        pct_pathway_taking_course =
+          scales::percent(pct_students_in_course, accuracy = 1)
+      ) %>%
+      select(
+        Pathway = pathway,
+        `Pathway EPSO Course` = C_course_name_clean,
+        `Students in Course` = num_students_in_course,
+        `Students in Pathway` = num_students_in_pathway,
+        pct_pathway_taking_course
+      )
+
+    reactable(
+      table_data,
+      searchable      = TRUE,
+      sortable        = TRUE,
+      striped         = TRUE,
+      bordered        = FALSE,
+      highlight       = TRUE,
+      defaultSorted   = "pct_pathway_taking_course",
+      defaultPageSize = 10,
+      theme = reactableTheme(
+        headerStyle = list(
+          background    = mnps_navy,
+          color         = "white",
+          fontWeight    = "700",
+          fontSize      = "12px",
+          textTransform = "uppercase",
+          letterSpacing = "0.5px",
+          borderBottom  = paste("3px solid", mnps_gold)
+        ),
+        stripedColor    = "#FAF8F2",
+        highlightColor  = "#FFF7DB",
+        borderColor     = "#E5E2D8",
+        cellPadding     = "10px 12px"
+      ),
+      columns = list(
+        Pathway = colDef(
+          style = function(value) {
+            bg <- pathway_colors[value]
+            if (is.na(bg)) bg <- "#ECECEC"
+            list(background = bg, fontWeight = "600", color = mnps_navy)
+          }
+        ),
+        pct_pathway_taking_course = colDef(
+          name  = "% of Pathway Taking Course",
+          align = "center",
+          style = list(fontWeight = "600", color = mnps_navy)
+        ),
+        `Students in Course`  = colDef(align = "center"),
+        `Students in Pathway` = colDef(align = "center")
+      )
+    )
+  })
+
+  #---------------------------------
+  # VISUAL 2
+  #---------------------------------
+  output$comparison_table <- renderReactable({
+
+    req(input$school_select, input$pathway_select)
+
+    selected_school_summary <- pathway_data %>%
+      filter(
+        C_four_year_home_school == input$school_select,
+        pathway %in% input$pathway_select
+      ) %>%
+      group_by(pathway) %>%
+      summarise(
+        selected_school_epso_count = n_distinct(C_course_name_clean),
+        .groups = "drop"
+      )
+
+    peer_summary <- pathway_data %>%
+      filter(pathway %in% input$pathway_select) %>%
+      group_by(C_four_year_home_school, pathway) %>%
+      summarise(
+        epso_count = n_distinct(C_course_name_clean),
+        .groups = "drop"
+      ) %>%
+      filter(C_four_year_home_school != input$school_select)
+
+    peer_schools <- unique(peer_summary$C_four_year_home_school)
+
+    peer_wide <- peer_summary %>%
+      filter(C_four_year_home_school %in% peer_schools) %>%
+      pivot_wider(
+        names_from  = C_four_year_home_school,
+        values_from = epso_count
+      )
+
+    final_table <- selected_school_summary %>%
+      left_join(peer_wide, by = "pathway") %>%
+      rename(
+        Pathway = pathway,
+        `My School EPSO Offerings` = selected_school_epso_count
+      )
+
+    school_cols <- setdiff(names(final_table), "Pathway")
+
+    status_high <- "#C7DCC0"
+    status_mid  <- "#F5E1A4"
+    status_low  <- "#E8B8B5"
+
+    reactable(
+      final_table,
+      bordered  = FALSE,
+      striped   = TRUE,
+      highlight = TRUE,
+      theme = reactableTheme(
+        headerStyle = list(
+          background    = mnps_navy,
+          color         = "white",
+          fontWeight    = "700",
+          fontSize      = "12px",
+          textTransform = "uppercase",
+          letterSpacing = "0.5px",
+          borderBottom  = paste("3px solid", mnps_gold)
+        ),
+        stripedColor    = "#FAF8F2",
+        highlightColor  = "#FFF7DB",
+        borderColor     = "#E5E2D8",
+        cellPadding     = "10px 12px"
+      ),
+      columns = c(
+        list(
+          Pathway = colDef(
+            style = function(value) {
+              bg <- pathway_colors[value]
+              if (is.na(bg)) bg <- "#ECECEC"
+              list(background = bg, fontWeight = "600", color = mnps_navy)
+            }
+          ),
+          `My School EPSO Offerings` = colDef(
+            align = "center",
+            style = list(
+              fontWeight   = "700",
+              color        = mnps_navy,
+              borderRight  = paste("2px solid", mnps_gold)
+            )
+          )
+        ),
+        setNames(
+          lapply(setdiff(school_cols, "My School EPSO Offerings"), function(col) {
+            colDef(
+              align = "center",
+              style = function(value) {
+                if (is.na(value)) return(list(color = "#bbb"))
+                if (value >= 3) {
+                  list(background = status_high, fontWeight = "600")
+                } else if (value == 2) {
+                  list(background = status_mid,  fontWeight = "600")
+                } else {
+                  list(background = status_low,  fontWeight = "600")
+                }
+              }
+            )
+          }),
+          setdiff(school_cols, "My School EPSO Offerings")
+        )
+      )
+    )
+  })
+
+  #---------------------------------
+  # VISUAL 3 — Course Gap Analysis
+  #---------------------------------
+  gap_data <- reactive({
+
+    req(input$school_select, input$pathway_select)
+
+    my_school_courses <- pathway_data %>%
+      filter(
+        C_four_year_home_school == input$school_select,
+        pathway %in% input$pathway_select
+      ) %>%
+      distinct(pathway, C_course_name_clean)
+
+    pathway_data %>%
+      filter(
+        pathway %in% input$pathway_select,
+        C_four_year_home_school != input$school_select
+      ) %>%
+      distinct(C_four_year_home_school, pathway, C_course_name_clean) %>%
+      anti_join(my_school_courses, by = c("pathway", "C_course_name_clean")) %>%
+      arrange(pathway, C_course_name_clean, C_four_year_home_school) %>%
+      select(
+        Pathway = pathway,
+        `Course Not Offered at Your School` = C_course_name_clean,
+        `Offered At` = C_four_year_home_school
+      )
+  })
+
+  output$gap_output <- renderUI({
+    if (nrow(gap_data()) == 0) {
+      div(
+        style = sprintf(
+          "padding: 18px; background-color: %s; border-left: 4px solid %s;
+           color: %s; font-style: italic; border-radius: 4px;",
+          mnps_light, mnps_gold, mnps_navy
+        ),
+        "No course gaps found — your school offers every course available in these pathways across the district."
+      )
+    } else {
+      reactableOutput("gap_table")
+    }
+  })
+
+  output$gap_table <- renderReactable({
+
+    reactable(
+      gap_data(),
+      searchable      = TRUE,
+      sortable        = TRUE,
+      striped         = TRUE,
+      bordered        = FALSE,
+      highlight       = TRUE,
+      defaultPageSize = 10,
+      groupBy         = "Pathway",
+      theme = reactableTheme(
+        headerStyle = list(
+          background    = mnps_navy,
+          color         = "white",
+          fontWeight    = "700",
+          fontSize      = "12px",
+          textTransform = "uppercase",
+          letterSpacing = "0.5px",
+          borderBottom  = paste("3px solid", mnps_gold)
+        ),
+        stripedColor    = "#FAF8F2",
+        highlightColor  = "#FFF7DB",
+        borderColor     = "#E5E2D8",
+        cellPadding     = "10px 12px"
+      ),
+      columns = list(
+        Pathway = colDef(
+          style = function(value) {
+            bg <- pathway_colors[value]
+            if (is.na(bg)) bg <- "#ECECEC"
+            list(background = bg, fontWeight = "600", color = mnps_navy)
+          }
+        ),
+        `Course Not Offered at Your School` = colDef(
+          style = list(fontWeight = "600", color = mnps_navy),
+          minWidth = 180
+        ),
+        `Offered At` = colDef(
+          minWidth = 160
+        )
+      )
+    )
+  })
+}
+
+#============================
+# RUN APP
+#============================
+
+shinyApp(ui = ui, server = server)
+
+```
+
+#Host
+
+```{r}
+rsconnect::setAccountInfo(name='selliserstrategies',
+			  token='C5998726CFED2F4FBB0D855F26049C1A',
+			  secret='6tKFwrfUygaVj3uN/WHJqQv+lxfZdrtTcuvp4Ko0')
+
+
+
+```
+
+# Part X: Upload File to Sharepoint
+
+```{r}
+processed_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/District%20Partners/Nashville/Nashville%20-%20HS%20Pathways%20-%202025/5.0%20SPLASH%202026"
+
+
+ers_write_sharepoint(data = pathway_school_table,
+                     folder_path = processed_data_folder_path,
+                     file_name_with_extension = "pathway_school_table_test.csv")
+```
