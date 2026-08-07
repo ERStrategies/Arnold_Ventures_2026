@@ -1,5 +1,5 @@
 ---
-title: "1_raw_data_course_catalog_validation"
+title: "1_raw_data_course_catalog_validation_MNPS"
 author: "Simon Ellis"
 reviewer: "Zach Friedman"
 initial write-up: "July 30 2024"
@@ -40,51 +40,24 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 ```{r}
 
 #update the folder path
-raw_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/District%20Partners/Denver/2024%20Transcript%20Analysis/1.%20Data%20&%20Analysis%20-%20Secure/1.0%20Raw%20Data"
+raw_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
 
 #replace file name with your files name as well as the years
 #add additional years and files as needed
 #year 1
-course_catalog_year_1 <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "20.21 Course Catalogs (updated 9.2.20).xlsx") %>%
-  clean_names() %>%
-  mutate(catalog_year = "20-21")
+course_catalog_raw <- ers_read_sharepoint(folder_path = raw_data_folder_path,
+                   file_name_with_extension = "AON Pathway State Courses Coded 10.20.23 .xlsx",
+    drive_name = "client_work_drive")
 
-##year 2
-course_catalog_year_2 <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "Course Catalog 23-24 - from Sam 8.1.24.xlsx") %>%
-  clean_names() %>%
-  mutate(catalog_year = "23-24")
+# Clean column names to remove spaces and special characters
+course_catalog_raw <- course_catalog_raw %>% clean_names()
+
+#rename to the template name
+course_catalog_all_years <- course_catalog_raw
 
 ```
 
-## 1.2 Append Files
 
-**ACTION: In rare cases, you might recieve multiple years of course catalog information. Use the code below to stack them, or skip to step 1.3!**
-
-```{r}
-
-# Check column names and structures
-str(course_catalog_year_1)
-str(course_catalog_year_2)
-
-# Identify column name mismatches
-setdiff(names(course_catalog_year_1), names(course_catalog_year_2))
-setdiff(names(course_catalog_year_2), names(course_catalog_year_1))
-
-# Ensure the columns match before binding
-common_columns <- intersect(names(course_catalog_year_1), names(course_catalog_year_2))
-
-#update column names where neccessary
-
-#append the tables
-course_catalog_all_years <- bind_rows(course_catalog_year_1, 
-                                      course_catalog_year_2)
-
-
-# Check the final structure
-str(course_catalog_all_years)
-```
 
 ## Part 2: Validate Data
 
@@ -133,14 +106,14 @@ course_catalog_all_years %>% nrow() #View output of check to know what to write 
 -   **Project Team Action:** Maybe change (see guidance in code block)
 
 ```{r}
-#remove rows
-# Remove rows where a specific condition is met
-# For example, remove rows where the subject detail is OTHER
-course_catalog_all_years <- course_catalog_all_years %>%
-  filter(subject_detail = "OTHER") #this is an example, you should replace this with the actual condition you want to filter on
-
-# Print the result
-print(head(course_catalog_all_years))
+# #remove rows
+# # Remove rows where a specific condition is met
+# # For example, remove rows where the subject detail is OTHER
+# course_catalog_all_years <- course_catalog_all_years %>%
+#   filter(subject_detail = "OTHER") #this is an example, you should replace this with the actual condition you want to filter on
+# 
+# # Print the result
+# print(head(course_catalog_all_years))
 ```
 
 ### 2.2 Rename Columns
@@ -160,26 +133,17 @@ print(head(course_catalog_all_years))
 
 course_catalog_all_years <- course_catalog_all_years %>%
   mutate(
-    D_course_id = `course_number`,
-    D_year = catalog_year, #If you received historic catalog data, this might indicate the year the course was offered
-    D_course_name = course_name,
-    D_course_description = course_description,
-    D_course_type = credit_type,
-    D_course_subj = NA,
-    D_course_rigor = credit_type,
-    D_course_duration = NA,
-    D_course_credit = credit_awarded,
-    D_dual_credit_flag = NA,
-    D_cte_flag = NA,
-    D_world_language_flag = NA,
-    D_AP_flag = NA,
-    D_pathways_flag = NA
-    
-#nice-to-have- add any district specific columns from the catalog that you want to preserve! For example;
-    #D_rfs_population_served_code = `RFS_P_POP_SERVED_CODE`, #we learned this code is used to identify populations of students served by the course
-    #D_course_onramps_indicator = `DIST_COURSE_ONRAMPS_INDICATOR`,
-   # .keep = "none" #"Keep-None" here will ONLY keep the columns listed above, so if you do not list a column, it will be deleted. Make sure to keep any district specific columns or other columns you need for your analysis.
+    D_course_id = `mnps_course_code`,
+    D_course_name = `mnps_course_name`,
+    D_course_type = `state_designation`,
+    D_pathway = `program_of_study`,
+    D_cluster = `cluster`,
+    D_course_level = `level`,
+    D_state_course_code = `course_code`,
+    D_state_course_name = `state_course_name`,
+    .keep = "none" #"Keep-None" here will ONLY keep the columns listed above, so if you do not list a column, it will be deleted. Make sure to keep any district specific columns or other columns you need for your analysis.
   )
+
 
 ```
 
@@ -203,7 +167,7 @@ course_catalog_all_years <- course_catalog_all_years %>%
 
 ```{r}
 #view duplicates in course catalog file
- course_catalog_all_years %>%
+ course_catalog_all_years_dups <- course_catalog_all_years %>%
   group_by_all() %>%
  mutate(n = n()) %>%
     filter(n>1) %>% 
@@ -226,10 +190,8 @@ view(course_catalog_all_years_dups) %>%
 
 ```{r}
 # Remove duplicate rows
-course_catalog_all_years_unique <- distinct(course_catalog_all_years)
+course_catalog_all_years <- distinct(course_catalog_all_years)
 
-#Check rows against previous file
-nrow(course_catalog_all_years_unique)
 ```
 
 ### 2.4 Missing & Unique Values
@@ -271,7 +233,8 @@ col_info <-  data.frame(
 #calc % missing
 col_info <- col_info %>% 
   mutate(Percent_Missing = round(NA_Rows / Count_Rows * 100,2),
-         Percent_Missing = Percent_Missing, nsmall = 2)
+         Percent_Missing = Percent_Missing, nsmall = 2) %>% 
+  print()
 
 
 ```
@@ -288,11 +251,27 @@ col_info <- col_info %>%
 
 ```{r}
  course_catalog_all_years %>%
-  group_by(D_course_id, D_year) %>%
+  group_by(D_course_id) %>%
   mutate(count = n_distinct(D_course_name)) %>%
   ungroup() %>%
   filter(count > 1) %>%
  arrange(D_course_id)# Keep only rows where there are multiple names
+
+#how many instances of courses having the exact same name?
+course_catalog_all_years %>%
+  group_by(D_course_name) %>%
+  summarise(count = n_distinct(D_course_id)) %>%
+  filter(count > 1) %>%
+  ungroup() %>%
+  arrange(desc(count)) # Keep only rows where there are multiple course IDs
+
+#how many instances of course code being exactly the same
+course_catalog_all_years %>%
+  group_by(D_course_id) %>%
+  summarise(count = n_distinct(D_course_name)) %>%
+  filter(count > 1) %>%
+  ungroup() %>%
+  arrange(desc(count)) # Keep only rows where there are multiple course names
 ```
 
 ### 2.5 Distinct Count of Courses
@@ -307,13 +286,20 @@ col_info <- col_info %>%
 
 ```{r}
 #count the number of distinct courses by course ID
-course_catalog_all_years %>% 
-  mutate(count_courses = length(unique(D_course_id))) %>% 
-  ungroup()
+course_catalog_all_years %>%
+  summarize(count_courses = n_distinct(D_course_id)) %>% 
+  print()
+
+#count the number of distinct courses by course name
+course_catalog_all_years %>%
+  summarize(count_courses = n_distinct(D_course_name)) %>% 
+  print()
+
+
 
 ```
 
-#### b. Distinct Count of Courses by ERS-Coded Subject Area
+#### b. Distinct Count of Courses by ERS-Coded Subject Area- don't have this for MNPS
 
 -   **What:** Count of courses by ERS-coded subject area. NOTE- this requires having completed course coding in excel before you bring in the file. See the transcript analysis landing page on Tettra for more information- <https://app.tettra.co/teams/ersknowledge/pages/transcript-analysis-start-here>
 
@@ -322,11 +308,11 @@ course_catalog_all_years %>%
 -   **Project Action:** Gut check/track
 
 ```{r}
-#subject area counts
-course_catalog_all_years %>% 
-  group_by(D_course_subj) %>% 
-  summarise(count_courses = length(unique(D_course_id))) %>% 
-  ungroup()
+# #subject area counts
+# course_catalog_all_years %>% 
+#   group_by(D_course_subj) %>% 
+#   summarise(count_courses = length(unique(D_course_id))) %>% 
+#   ungroup()
 
 ```
 
@@ -341,16 +327,20 @@ course_catalog_all_years %>%
 -   **Project Action:** Gut check/track
 
 ```{r}
-# Count Pathway courses
-course_catalog_all_years%>% 
-  group_by(D_pathway_flag) %>% 
-  summarise(count_courses = n_distinct(D_course_id)) %>% 
-  ungroup()
+#First lets create a new column called D_pathway_flag that is a Y for every row except those where the pathway is Cambridge / IB Diploma Program
+course_catalog_all_years <- course_catalog_all_years %>%
+  mutate(D_pathway_flag = ifelse(D_pathway == "Cambridge / IB Diploma Program", "N", "Y"))
+
+# # Count Pathway courses
+# course_catalog_all_years%>% 
+#   group_by(D_pathway_flag) %>% 
+#   summarise(count_courses = n_distinct(D_course_id)) %>% 
+#   ungroup()
 
 
-#calc % Pathway courses
-percent_pathway <- (sum(course_catalog_all_years_unique$D_pathway_flag =="Y") / length(course_catalog_all_years_unique$D_pathway_flag)) *100 %>% 
-  print()
+# #calc % Pathway courses
+# percent_pathway <- (sum(course_catalog_all_years_unique$D_pathway_flag =="Y") / length(course_catalog_all_years_unique$D_pathway_flag)) *100 %>% 
+#   print()
 
 ```
 
@@ -363,9 +353,9 @@ percent_pathway <- (sum(course_catalog_all_years_unique$D_pathway_flag =="Y") / 
 -   **Project Action:** Gut check/track
 
 ```{r}
-#Filter to pathway courses, Review the resulting data frame
-courses_with_pathway_flag <- course_catalog_all_years_unique[course_catalog_all_years_unique$D_pathway_flag == "Y", ] %>% 
-  print()
+# #Filter to pathway courses, Review the resulting data frame
+# courses_with_pathway_flag <- course_catalog_all_years_unique[course_catalog_all_years_unique$D_pathway_flag == "Y", ] %>% 
+#   print()
 
 ```
 
@@ -378,14 +368,25 @@ courses_with_pathway_flag <- course_catalog_all_years_unique[course_catalog_all_
 -   **Project Action:** Gut check/track
 
 ```{r}
+#First create a dual credit flag if D_course type is equal to "	Statewide Dual Credit" or "Dual Enrollment it gets a "Y", otherwise "N"
+course_catalog_all_years <- course_catalog_all_years %>%
+  mutate(D_dual_credit_flag = ifelse(D_course_type %in% c("Statewide Dual Credit", "Dual Enrollment"), "Y", "N"))
+
+
 # Count dual credit courses
-course_catalog_all_years_unique %>% 
+course_catalog_all_years %>% 
   group_by(D_dual_credit_flag) %>% 
   summarise(count_courses = n_distinct(D_course_id)) %>% 
   ungroup()
 
+#what about if I count using state course ID
+course_catalog_all_years %>% 
+  group_by(D_dual_credit_flag) %>% 
+  summarise(count_courses = n_distinct(D_state_course_code)) %>% 
+  ungroup()
+
 #calc % dual credit
-percent_dual_credit <- (sum(course_catalog_all_years_unique$D_dual_credit_flag =="Y") / length(course_catalog_all_years_unique$D_dual_credit_flag)) *100
+percent_dual_credit <- (sum(course_catalog_all_years$D_dual_credit_flag =="Y") / length(course_catalog_all_years$D_dual_credit_flag)) *100
 
 print(percent_dual_credit)
 ```
@@ -400,11 +401,11 @@ print(percent_dual_credit)
 
 ```{r}
 #Filter to dual credit courses, Review the resulting data frame
-courses_with_dual_credit_flag <- course_catalog_all_years_unique %>% filter(D_dual_credit_flag == "Y") %>% 
+courses_with_dual_credit_flag <- course_catalog_all_years %>% filter(D_dual_credit_flag == "Y") %>% 
   print()
 ```
 
-## 2.7 Pathways Companion Coding
+## 2.7 Pathways Companion Coding- This was only "Pathways" Essentially for MNPS, so we don't need the below
 
 #### a. Review and Code the Pathways Companion Sheet
 
@@ -415,42 +416,42 @@ courses_with_dual_credit_flag <- course_catalog_all_years_unique %>% filter(D_du
 -   **Project Action:** Gut check/track
 
 ```{r}
-#First, add ERS standard names onto the pathways fields. 
-#if the ERS Standard column is present in your data then type your district's column on the right hand side (it is okay if the names are identical)
-#if the ERS Standard column is not present in your data then type "MISSING"
-#you can also exclude the columns you do not need for your analysis by simply not renaming those columns in this step (the mutate function with the .keep = none argument only retains columns that follow the ERS column tagging convention)
-pathways_companion <- pathways %>%
-  select(
-    D_course_id = `Course.ID:`,
-    D_course_name = `Course.Name.(PDF)`,
-    D_course_level = `Course.Level`,
-    D_auto_pathway = `Automotive`,
-    D_animal_science_pathway = `Animal.Science`,
-    D_applied_agricultural_engineering_pathway = `Applied.Agriculture.Engineering`,
-    D_plant_science_pathway = `Plant.Science`,
-    D_carpentry_pathway = `Carpentry`,
-    D_digital_communication_pathway = `Digital.Communications`,
-    D_graphic_arts_pathway = `Graphic.Arts`,
-    D_animation_pathway = `Animation`,
-    D_commercial_photography_pathway = `Commercial.Photohraphy`,
-    D_accounting_and_financial_services_pathway = `Accounting.and.Financial.Services`,
-    D_early_learning_pathway = `Early.Learning`,
-    D_healthcare_theraputic_pathway = `Healthcare.Therapeutic`,
-    D_culinary_arts_pathway = `Culinary.Arts`,
-    D_web_development_pathway = `Web.Development`,
-    D_law_enforcement_pathway = `Law.Enforcement`,
-    D_cosmetology_pathway = `Cosmetology`,
-    D_advadnced_manufacturing_and_machinery_pathway = `Advadnced.Manufacturing.and.Machinery.(Robotics)`,
-    D_biomedical_science_pathway = `Biomedical.Science`,
-    D_engineering_pathway = `Engineering`,
-    D_cybersecurity_pathway = `CyberSecurity`,
-    .keep = "none" #"Keep-None" here will ONLY keep the columns listed above, so if you do not list a column, it will be deleted. Make sure to keep any district specific columns or other columns you need for your analysis.
-
-  )
-print(pathways_companion)
-
-#and check that the number of rows has not changed
-nrow(pathways_companion)
+# #First, add ERS standard names onto the pathways fields. 
+# #if the ERS Standard column is present in your data then type your district's column on the right hand side (it is okay if the names are identical)
+# #if the ERS Standard column is not present in your data then type "MISSING"
+# #you can also exclude the columns you do not need for your analysis by simply not renaming those columns in this step (the mutate function with the .keep = none argument only retains columns that follow the ERS column tagging convention)
+# pathways_companion <- pathways %>%
+#   select(
+#     D_course_id = `Course.ID:`,
+#     D_course_name = `Course.Name.(PDF)`,
+#     D_course_level = `Course.Level`,
+#     D_auto_pathway = `Automotive`,
+#     D_animal_science_pathway = `Animal.Science`,
+#     D_applied_agricultural_engineering_pathway = `Applied.Agriculture.Engineering`,
+#     D_plant_science_pathway = `Plant.Science`,
+#     D_carpentry_pathway = `Carpentry`,
+#     D_digital_communication_pathway = `Digital.Communications`,
+#     D_graphic_arts_pathway = `Graphic.Arts`,
+#     D_animation_pathway = `Animation`,
+#     D_commercial_photography_pathway = `Commercial.Photohraphy`,
+#     D_accounting_and_financial_services_pathway = `Accounting.and.Financial.Services`,
+#     D_early_learning_pathway = `Early.Learning`,
+#     D_healthcare_theraputic_pathway = `Healthcare.Therapeutic`,
+#     D_culinary_arts_pathway = `Culinary.Arts`,
+#     D_web_development_pathway = `Web.Development`,
+#     D_law_enforcement_pathway = `Law.Enforcement`,
+#     D_cosmetology_pathway = `Cosmetology`,
+#     D_advadnced_manufacturing_and_machinery_pathway = `Advadnced.Manufacturing.and.Machinery.(Robotics)`,
+#     D_biomedical_science_pathway = `Biomedical.Science`,
+#     D_engineering_pathway = `Engineering`,
+#     D_cybersecurity_pathway = `CyberSecurity`,
+#     .keep = "none" #"Keep-None" here will ONLY keep the columns listed above, so if you do not list a column, it will be deleted. Make sure to keep any district specific columns or other columns you need for your analysis.
+# 
+#   )
+# print(pathways_companion)
+# 
+# #and check that the number of rows has not changed
+# nrow(pathways_companion)
     
 ```
 
@@ -463,42 +464,42 @@ nrow(pathways_companion)
 -   **Project Action:** Gut check/track
 
 ```{r}
-#First lets count the number of courses per pathway by looking at the number of rows in each pathway with a value of "Y"
-pathways_companion_counts <- pathways_companion %>%
-  summarise(
-    D_auto_pathway = sum(D_auto_pathway == "Y"),
-    D_animal_science_pathway = sum(D_animal_science_pathway == "Y"),
-    D_applied_agricultural_engineering_pathway = sum(D_applied_agricultural_engineering_pathway == "Y"),
-    D_plant_science_pathway = sum(D_plant_science_pathway == "Y"),
-    D_carpentry_pathway = sum(D_carpentry_pathway == "Y"),
-    D_digital_communication_pathway = sum(D_digital_communication_pathway == "Y"),
-    D_graphic_arts_pathway = sum(D_graphic_arts_pathway == "Y"),
-    D_animation_pathway = sum(D_animation_pathway == "Y"),
-    D_commercial_photography_pathway = sum(D_commercial_photography_pathway == "Y"),
-    D_accounting_and_financial_services_pathway = sum(D_accounting_and_financial_services_pathway == "Y"),
-    D_early_learning_pathway = sum(D_early_learning_pathway == "Y"),
-    D_healthcare_theraputic_pathway = sum(D_healthcare_theraputic_pathway == "Y"),
-    D_culinary_arts_pathway = sum(D_culinary_arts_pathway == "Y"),
-    D_web_development_pathway = sum(D_web_development_pathway == "Y"),
-    D_law_enforcement_pathway = sum(D_law_enforcement_pathway == "Y"),
-    D_cosmetology_pathway = sum(D_cosmetology_pathway == "Y"),
-    D_advadnced_manufacturing_and_machinery_pathway = sum(D_advadnced_manufacturing_and_machinery_pathway == "Y"),
-    D_biomedical_science_pathway = sum(D_biomedical_science_pathway == "Y"),
-    D_engineering_pathway = sum(D_engineering_pathway == "Y"),
-    D_cybersecurity_pathway = sum(D_cybersecurity_pathway == "Y")
-  )
-print(pathways_companion_counts)
-
-
-#Now lets check N/A rows- this would result from any courses without a course ID in your pathways companion
-pathways_companion %>%
-  filter(is.na(D_course_id))
-
-#and duplicate courses for both course ID and Course Name (should be zero)
- pathways_companion %>%
-  group_by(D_course_id) %>%
-  filter(n() > 1) %>%
-  ungroup()
+# #First lets count the number of courses per pathway by looking at the number of rows in each pathway with a value of "Y"
+# pathways_companion_counts <- pathways_companion %>%
+#   summarise(
+#     D_auto_pathway = sum(D_auto_pathway == "Y"),
+#     D_animal_science_pathway = sum(D_animal_science_pathway == "Y"),
+#     D_applied_agricultural_engineering_pathway = sum(D_applied_agricultural_engineering_pathway == "Y"),
+#     D_plant_science_pathway = sum(D_plant_science_pathway == "Y"),
+#     D_carpentry_pathway = sum(D_carpentry_pathway == "Y"),
+#     D_digital_communication_pathway = sum(D_digital_communication_pathway == "Y"),
+#     D_graphic_arts_pathway = sum(D_graphic_arts_pathway == "Y"),
+#     D_animation_pathway = sum(D_animation_pathway == "Y"),
+#     D_commercial_photography_pathway = sum(D_commercial_photography_pathway == "Y"),
+#     D_accounting_and_financial_services_pathway = sum(D_accounting_and_financial_services_pathway == "Y"),
+#     D_early_learning_pathway = sum(D_early_learning_pathway == "Y"),
+#     D_healthcare_theraputic_pathway = sum(D_healthcare_theraputic_pathway == "Y"),
+#     D_culinary_arts_pathway = sum(D_culinary_arts_pathway == "Y"),
+#     D_web_development_pathway = sum(D_web_development_pathway == "Y"),
+#     D_law_enforcement_pathway = sum(D_law_enforcement_pathway == "Y"),
+#     D_cosmetology_pathway = sum(D_cosmetology_pathway == "Y"),
+#     D_advadnced_manufacturing_and_machinery_pathway = sum(D_advadnced_manufacturing_and_machinery_pathway == "Y"),
+#     D_biomedical_science_pathway = sum(D_biomedical_science_pathway == "Y"),
+#     D_engineering_pathway = sum(D_engineering_pathway == "Y"),
+#     D_cybersecurity_pathway = sum(D_cybersecurity_pathway == "Y")
+#   )
+# print(pathways_companion_counts)
+# 
+# 
+# #Now lets check N/A rows- this would result from any courses without a course ID in your pathways companion
+# pathways_companion %>%
+#   filter(is.na(D_course_id))
+# 
+# #and duplicate courses for both course ID and Course Name (should be zero)
+#  pathways_companion %>%
+#   group_by(D_course_id) %>%
+#   filter(n() > 1) %>%
+#   ungroup()
 
 ```
 
@@ -511,17 +512,12 @@ pathways_companion %>%
 -   **Project Action:** None
 
 ```{r}
-processed_data_folder_path <- "https://erstrategies1.sharepoint.com/sites/orgfiles/Client%20Work/District%20Partners/Columbus%20City/22-23%20Financial%20Equity%20&%20Funding%20System%20Design/1.%20Data%20&%20Analysis%20-%20Secure/Processed%20Data%20for%20R"
+processed_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
 
-#pathways companion
-ers_write_sharepoint(data = pathways_companion,
-                     folder_path = processed_data_folder_path,
-                     file_name_with_extension = "pathways_companion_validated.csv")
-
-#course catalog validated
 ers_write_sharepoint(data = course_catalog_all_years,
                      folder_path = processed_data_folder_path,
-                     file_name_with_extension = "course_catalog_validated.csv")
+                     file_name_with_extension = "MNPS_Course_Catalog_Validated.csv",
+                    drive_name = "client_work_drive")
 ```
 
 ## Part 4: Knit the file into a nicely formatted HTML that you can share with teammates!
