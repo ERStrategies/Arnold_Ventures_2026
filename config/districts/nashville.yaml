@@ -1,1 +1,324 @@
-# hello
+# =============================================================================
+# 00_district_config.yml
+#
+# This is THE configuration file for the entire pipeline.
+# New district = copy this file and edit the values below; the code doesn't change.
+#
+# HOW TO USE THIS FILE:
+#   You won't fill everything in at once. Different sections become relevant
+#   as you move through the stages. Here's the order:
+#
+#   BEFORE Stage 01 (Explore):
+#     - "district", "year", "raw_data_folder_path", "raw_files" (lines ~20-30)
+#       You need these so Stage 01 can find and load your raw data.
+#
+#   DURING/AFTER Stage 01 (Explore):
+#     - "column_map" — use the Claude skill tofill in after you've looked at 
+#       the raw data and know which district column corresponds to which standard name.
+#     - "stu_demographics_join" — fill in once you've identified the join key
+#       and which demographic columns to bring in.
+#     - "scope" — decide which rows to drop (e.g., missing student IDs).
+#     - "intake" — note how time is encoded (expression vs. period+rotation).
+#
+#   BEFORE Stage 02 (Coding & Exclusions):
+#     - "raw_files > course_coding" — update the path once the coding file exists.
+#     - "coding" — set the join key and uncoded threshold.
+#     - "exclusions" — define which courses to exclude from each metric.
+#       (You'll refine these as you review Check 2.6 output.)
+#
+#   BEFORE Stage 03 (Weights, Minutes & DB Resolution):
+#     - "class_id" — define what combination of fields makes a unique class.
+#     - "time_format" and "time_cols" — confirm how time is encoded.
+#     - "weights" — set term weights, rotation weights, and period weights.
+#     - "bell_minutes" — enter clock time per period from the bell schedule.
+#     - "expression" — define how schedule expressions parse into meetings.
+#     - "db_sizing_filters" — optional filters for the double-booking analysis.
+#     - "db_resolution" and "teacher_db" — resolution strategy settings.
+#
+#   BEFORE Stage 04 (Precision-Ready):
+#     - "self_contained" and "buckets" — thresholds and class size buckets.
+#
+# =============================================================================
+
+
+# ===========================================================================
+# SECTION 1: BASICS — Where is the data?
+# WHEN TO FILL IN: Before you run ANYTHING. Stage 01 won't work without this.
+# ===========================================================================
+
+district: Springfield Public Schools
+year: "2025-26"
+
+# The SharePoint folder path where all data for this district lives.
+# Everything below is relative to this path.
+raw_data_folder_path: "District Partners/Springfield MA/Springfield - 26 - HS Scheduling/1. Data & Analysis - Secure/For R"
+
+# File paths within that folder for each raw data source.
+raw_files:
+  cs_raw:              "/0. Raw Data/student_course_schedules.csv"
+  stu_demographics:    "/0. Raw Data/student_enrollment_and_demographic.xlsx"
+
+  # COURSE CODING FILE:
+  # This file doesn't exist when you first start — you CREATE it during Stage 01
+  # by exporting a blank template, then filling it in (manually or with AI help).
+  # Once it's ready, put it in the /1. Coding folder and update this path.
+  # Stage 02 will NOT work correctly until this file exists and is coded.
+  course_coding:       "/1. Coding/cs_course_coding.xlsx"
+
+
+# ===========================================================================
+# SECTION 2: INTAKE — How was this data collected?
+# WHEN TO FILL IN: During Stage 01, once you understand the data structure.
+# ===========================================================================
+intake:
+  # Is this a single snapshot of schedules, or does it track enrollment over time?
+  enrollment_type: snapshot
+  snapshot_date: null
+
+# ===========================================================================
+# SECTION 3: COLUMN MAP — What are the district's column names?
+# WHEN TO FILL IN: After running Stage 01's raw profile, where you can see
+#   every column name in the data. Map each one to its standard D_ name.
+#   Stage 01 will NOT rename columns correctly until this is filled in.
+#
+# Format: standard_name: district_column_name
+# The left side (D_...) is what the pipeline expects. The right side is what
+# the district actually called that column in their data export.
+# ===========================================================================
+
+column_map:
+  course_schedule:
+    D_location_id:       Sch_ID
+    D_location_name:     Sch_Name
+    D_stu_id:            Stu_ID
+    D_room:              Room_Nu
+    D_course_id:         Crs_ID
+    D_course_name:       Crs_Name
+    D_course_section:    Section
+    D_period:            Period
+    D_term:              Term
+    D_expression:        Rotation      # Note: Springfield calls it "Rotation" but it's actually an expression
+    D_employee_id:       Teacher_ID
+    D_course_section_id: SECTIONID
+    D_year_id:           YEAR_ID
+
+  demographics:
+    D_stu_id:            Stu_ID
+    D_school_year:       School_Year
+    D_stu_grade:         "Current Grade Level ID"
+    D_location_id:       "SIS School ID"
+    D_stu_swd_flag:      "Stu_SWD flag"
+    D_stu_ell_flag:      "Stu_ELL flag"
+    D_stu_poverty_flag:  "Stu_Poverty Flag"
+
+
+# ===========================================================================
+# SECTION 4: DEMOGRAPHICS JOIN — How to merge student demographics onto schedules
+# WHEN TO FILL IN: During Stage 01, after you've identified the matching
+#   student ID column in both files. Stage 01 needs this to merge demographics.
+# ===========================================================================
+
+stu_demographics_join:
+  # Which column links students between the two files?
+  key: D_stu_id
+
+  # Which demographic columns to bring into the schedule data?
+  brings_in: [D_stu_grade, D_stu_swd_flag, D_stu_ell_flag, D_stu_poverty_flag]
+
+  # Optional: recode raw values to something more usable.
+  # For example, convert "Y"/"N" text to 1/0 numbers.
+  # Delete or hash out this section if no recoding is needed.
+  recode:
+    D_stu_swd_flag: {"Y": 1, "N": 0}
+    D_stu_ell_flag: {"Y": 1, "N": 0}
+    D_stu_poverty_flag: {"Y": 1, "N": 0}
+
+
+# ===========================================================================
+# SECTION 5: SCOPE — Which rows to keep?
+# WHEN TO FILL IN: During Stage 01. Decide what makes a row unusable
+#   (e.g., no student ID means we can't link it to anything).
+# ===========================================================================
+
+scope:
+  # Drop any row where these columns are null/NA/empty.
+  # This happens AFTER the demographics merge, so missing demographic matches
+  # will cause rows to drop if you include demographic fields here.
+  drop_when_null: ["D_stu_id", "D_stu_grade"]
+
+
+# ===========================================================================
+# SECTION 6: CODING & EXCLUSIONS — What is each course, and what to exclude?
+# WHEN TO FILL IN: Before Stage 02. You'll refine exclusion rules iteratively
+#   as you review the Check 2.6 output (which shows what's being excluded).
+#   Stage 02 will run without exclusions, but results won't be meaningful.
+# ===========================================================================
+
+coding:
+  # Which column to join the coding file on (must exist in both cs_data and coding file)
+  join_key: D_course_name
+
+  # Flag if more than this % of records are still "UNCODED" after the merge
+  uncoded_flag_threshold_pct: 2
+
+  # Check 2.7: flag time-slots with very few distinct courses (likely not real instruction)
+  max_unique_courses: 5
+
+# EXCLUSION RULES:
+# These determine which records are "Include" vs "Exclude" for each metric.
+# A record is excluded if ANY rule for that metric matches it.
+#
+# Available operators: eq (equals), ne (not equals), in (is one of), not_in (is not one of)
+# Rules referencing columns that don't exist yet are safely skipped.
+#
+# C_course_time_exclude: controls what's included in TIME analysis
+# C_class_size_and_teacher_load_exclude: controls what's included in CLASS SIZE and TEACHER LOAD
+exclusions:
+  C_course_time_exclude:
+    - { col: C_course_subject_area, op: eq, val: Untracked }
+    - { col: C_course_time_of_day,  op: ne, val: "During school" }
+    - { col: C_course_subject,      op: eq, val: Internship }
+    - { col: C_course_format,       op: eq, val: Virtual }
+  C_class_size_and_teacher_load_exclude:
+    - { col: C_course_subject_area, op: eq, val: Un-prepped }
+    - { col: C_course_subject,      op: in, val: [Maintenance, Internship, Teaching Assistant, Credit Recovery] }
+    - { col: C_course_format,       op: eq, val: Virtual }
+
+
+# ===========================================================================
+# SECTION 7: CLASS IDENTITY — What makes a unique "class"?
+# WHEN TO FILL IN: Before Stage 03. The class ID recipe determines how we
+#   group students into classes. Getting this wrong means incorrect class sizes
+#   and double-booking detection. Check 2.8 validates this.
+# ===========================================================================
+
+class_id:
+  # Which columns, combined, uniquely identify a single class?
+  # Typically: school + time + teacher (and sometimes section ID).
+  recipe: [D_location_id, D_expression, D_term, D_course_section_id]
+
+
+# ===========================================================================
+# SECTION 8: TIME FORMAT — How does the schedule encode when classes meet?
+# WHEN TO FILL IN: During Stage 01, once you understand the time columns.
+#   Must be correct before Stage 03 (weights depend on this).
+# ===========================================================================
+
+# Two options:
+#   "expression" = one column like "3(A-B)" that encodes period AND rotation together
+#   "period_rotation" = separate columns for period and rotation
+time_format: expression
+
+time_cols:
+  expression:      [D_expression]
+  period_rotation: [D_period, D_rotation]
+
+
+# ===========================================================================
+# SECTION 9: WEIGHTS — How much of a full schedule does each class represent?
+# WHEN TO FILL IN: Before Stage 03. You need the bell schedule and an
+#   understanding of terms/rotations from the district.
+#   Stage 03 will NOT produce correct results without these.
+#
+# KEY CONCEPT: Weight is dimensionless — it represents a FRACTION of a full
+# schedule, not minutes or hours. Minutes come separately (see bell_minutes).
+# ===========================================================================
+
+weights:
+  # TERM WEIGHTS: What fraction of the year does each term cover?
+  # A full-year term = 1.0, a semester = 0.5, a quarter = 0.25, etc.
+  # The keys here are the actual term values that appear in D_term.
+  term:          { 3500: 1.0,           3501: 0.5,       3502: 0.5 }
+
+  # TERM INTERVALS: What portion of the year does each term span? (0 = start, 1 = end)
+  # Used to detect overlapping terms for double-booking.
+  term_interval: { 3500: [0, 1],        3501: [0, 0.5],  3502: [0.5, 1] }
+
+  # TERM EXPANSION: Which sub-terms does each term cover?
+  # A full-year term "expands" into both semesters; a semester expands into just itself.
+  # Used so a full-year class can conflict with a semester class.
+  term_expands:  { 3500: [3501, 3502],  3501: [3501],    3502: [3502] }
+
+  # ROTATION WEIGHTS: What fraction of an A/B cycle does a rotation represent?
+  # If a school alternates A/B days, each day = 0.5.
+  # Override specific school+expression combos if they differ (e.g., advisory meets less often).
+  rotation:
+    default: 0.5
+    by_school:
+      "SCI TECH": { overrides: { "8@A": 0.2, "8@B": 0.2 } }   # advisory ~once/week
+
+  # PERIOD WEIGHTS: How many "slots" does one period represent?
+  # Usually 1.0. Set to 2.0 for true block periods (rare — use only if a school
+  # has some periods that are literally twice as long as others).
+  period:
+    default: 1.0
+    by_school: {}
+
+
+# ===========================================================================
+# SECTION 10: BELL MINUTES — Actual clock time per period
+# WHEN TO FILL IN: Before Stage 03. Get this from the district's bell schedule.
+#   Weight × Minutes = real instructional time.
+#
+# NOTE: These are SEPARATE from weights on purpose. Weights tell us the
+# fraction of a schedule; minutes tell us the actual time. Keeping them
+# separate lets us compare schools with different period lengths fairly.
+# ===========================================================================
+
+bell_minutes:
+  by_school:
+    "PUTNAM":   { default: 43 }
+    "SCI TECH": { default: 90, overrides: { "8@A": 55, "8@B": 55 } }
+
+
+# ===========================================================================
+# SECTION 11: DOUBLE-BOOKING ANALYSIS SETTINGS
+# WHEN TO FILL IN: Before Stage 03. These control how DB is detected and resolved.
+# ===========================================================================
+
+# SIZING FILTERS: Optional "what-if" filters for the double-booking analysis ONLY.
+# These temporarily remove rows from the DB calculation so you can see what
+# the DB rate would be without certain records. They do NOT affect the actual data.
+# To use no filters, set: db_sizing_filters: []
+db_sizing_filters:
+  - { col: D_course_name,     op: in,     val: "VHS Anchor Year" }
+
+# EXPRESSION GRAMMAR: How to parse D_expression into individual meetings.
+# "atoms" = named period slots (empty if periods are plain numbers like 1, 2, 3).
+# "rotations" = which token means which day(s). "A-B" means BOTH A and B days.
+expression:
+  atoms: []
+  expands: {}
+  rotations:
+    A:     ["A"]
+    B:     ["B"]
+    "A-B": ["A", "B"]
+    AB:    ["A", "B"]
+
+# RESOLUTION STRATEGY: How to handle double-bookings once detected.
+# Options for each: "full" (resolve all), "none" (skip), or custom rules.
+db_resolution:
+  student: full
+  teacher: full
+  class:   full
+
+# TEACHER DB SETTINGS:
+# consolidate_max_size: when merging co-taught classes, max combined size allowed
+# exempt_subjects: subjects where teacher DB is expected and shouldn't be resolved
+teacher_db:
+  consolidate_max_size: 35
+  exempt_subjects: ["PE/Health", "Art/Music"]
+
+
+# ===========================================================================
+# SECTION 12: STAGE 04 — PRECISION-READY SETTINGS
+# WHEN TO FILL IN: Before Stage 04.
+# ===========================================================================
+
+# Self-contained classroom thresholds
+self_contained:
+  swd_ell_threshold_pct: 50        # flag classes where SWD+ELL students exceed this %
+
+# Class size buckets for reporting (min and max of each bucket)
+buckets:
+  class_size: [[0, 6], [7, 12], [13, 18], [19, 24], [25, 30], [31, 35], [36, null]]

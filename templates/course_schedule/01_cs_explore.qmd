@@ -1,0 +1,321 @@
+---
+title: "Course Schedule Processing — Step 1: Explore"
+subtitle: "Config-free data profiling"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    theme: cosmo
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+<!---
+## What this file does (high level)
+
+This is Stage 01 — the very first step. It takes the RAW data files exactly
+as received from the district and does three things:
+
+1. **Profiles** every column so you can see what you're working with
+   (types, distinct values, missing data, etc.)
+2. **Preps** the raw data by renaming columns to standard names, merging
+   in student demographics, and filtering to in-scope rows.
+3. **Exports** the prepped data for Stage 02.
+
+This is the most hands-on stage — you'll iterate on the prep steps until
+the re-profiled data looks right. No coding or exclusion logic happens here;
+that's all in Stage 02.
+--->
+
+
+```{r setup-libraries}
+# Start fresh
+rm(list = ls())
+# Core data manipulation
+library(tidyverse)
+library(data.table)
+library(lubridate)
+library(glue)
+library(stringr)
+# Reading files
+library(openxlsx)
+library(readxl)
+library(here)
+# SharePoint access
+library(Microsoft365R)
+library(erstools)
+# Formatting and display
+library(gt)
+library(htmltools)
+library(scales)
+```
+
+```{r setup-helpers-and-config}
+# Load helper functions for profiling/exploring data
+source(here::here("Tool Scripts - 2026 Updates", "helpers", "00_explore_helpers.R"))
+source(here::here("Tool Scripts - 2026 Updates", "helpers", "00_review_helpers.R"))
+
+# Read the district config — tells us where to find files, how to rename columns, etc.
+config <- yaml::read_yaml(
+  here::here("Tool Scripts - 2026 Updates", "00_district_config.yml")
+)
+raw_data_folder_path <- config$raw_data_folder_path
+```
+
+```{r load-raw-data}
+# Connect to SharePoint where the data files live
+orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
+orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)
+internal_drive    <- orgfiles_site$get_drive("Internal")
+
+# Load the raw course schedule — exactly as received from the district.
+# No renaming, no filtering, no transformations yet.
+cs_raw <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = config$raw_files$cs_raw
+)
+
+# Load student demographic data (SWD, ELL, FRL, race, etc.)
+# This will be merged onto the course schedule during prep.
+# Wrapped in tr_safe() so the doc renders even if the file doesn't exist yet.
+stu_demographics <- tr_safe(
+  ers_read_sharepoint(
+    folder_path = raw_data_folder_path,
+    file_name_with_extension = config$raw_files$stu_demographics
+  ),
+  otherwise = NULL
+)
+```
+
+## What this pass is for
+
+The **exploratory** half of Tier 0 — raw files, district headers, no config.
+Two jobs: (1) see what you have well enough to author `column_map`, and (2)
+work out the **prep recipe** (join / filter / derive) that shapes the raw file
+into the fields the pipeline expects. The loop is: **profile raw → prep edits →
+re-profile → iterate** until the prepped profile looks right.
+
+## Course schedule — column profile (raw)
+
+Each column with type, distinct count, missingness, min/max, and — for
+low-distinct columns — the full value set inline.
+
+```{r cs-profile}
+explore_gt(explore_profile(cs_raw), "Raw course schedule — every column")
+```
+
+## Course schedule — peek at candidate time columns
+
+High-cardinality columns show only a sample above. List the ones that look like
+they encode **time** (term / rotation / period / expression / course number)
+and inspect their top values — including whether term is hiding inside the
+course number.
+
+```{r cs-peek}
+# ---- Which columns might represent time/scheduling? ----
+# Edit this list to match the column names you see in the profile above.
+# These are the ones we want to inspect more closely.
+peek_cols <- c("Term", "Rotation", "Period", "Expression", "Period Expression")
+
+peek <- peek_cols[peek_cols %in% names(cs_raw)]
+
+if (length(peek) == 0) {
+  htmltools::HTML(
+    "<em>None of the named columns are present — adjust peek_cols to match the profile above.</em>"
+  )
+} else {
+  explore_render(
+    setNames(
+      lapply(peek, function(col_name) explore_value_counts(cs_raw, col_name, top = 40)),
+      peek
+    )
+  )
+}
+```
+
+## Student demographics coding — column profile (raw)
+
+The join source for student demographic flags (SWD, ELL, FRL). Find the column here
+that matches the student ID column in the CS profile — that's your join key.
+
+```{r dem-profile}
+explore_gt(explore_profile(stu_demographics), "Raw student demographics — every column")
+```
+
+## Prep edits (staging)
+
+Your scratch space to shape the raw data into what the pipeline needs. Each edit
+below eventually **promotes** to a durable home — this block is where you get it
+right first. Fill in the `<...>` placeholders from the profiles above, then set
+this chunk's `eval` to `true`.
+
+```{r prep}
+#| eval: true
+
+# Re-read config in case you've updated it between renders
+config <- yaml::read_yaml(
+  here::here("Tool Scripts - 2026 Updates", "00_district_config.yml")
+)
+
+# ---- Step 1: RENAME columns ----
+# The config's "column_map" tells us which district column name maps to which
+# standard ERS name (e.g., "Student Number" -> "D_stu_id").
+# This makes the rest of the pipeline work regardless of what the district
+# called their columns.
+cs_prepped <- cs_raw |>
+  rename(any_of(unlist(config$column_map$course_schedule)))
+
+# ---- Step 2: MERGE student demographics ----
+# Join demographic data (race, grade, SWD, ELL, FRL) onto the schedule.
+# This lets us analyze time-use patterns by student subgroup later.
+if (exists("stu_demographics")) {
+  dem_cfg <- config$stu_demographics_join
+
+  # Rename demographic columns to standard names, then keep only what we need
+  demographics_cleaned <- stu_demographics |>
+    rename(any_of(unlist(config$column_map$demographics))) |>
+    select(all_of(c(dem_cfg$key, dem_cfg$brings_in)))
+
+  # Apply any value recodes specified in config
+  # (e.g., "Y"/"N" -> "Yes"/"No", or numeric codes -> labels)
+  if (!is.null(dem_cfg$recode)) {
+    for (col_name in names(dem_cfg$recode)) {
+      mapping <- dem_cfg$recode[[col_name]]
+      demographics_cleaned <- demographics_cleaned |>
+        mutate(!!col_name := unlist(mapping)[as.character(.data[[col_name]])])
+    }
+  }
+
+  # Join demographics onto the course schedule by student ID
+  cs_prepped <- cs_prepped |>
+    left_join(demographics_cleaned, by = dem_cfg$key)
+}
+
+# ---- Step 3: FILTER to in-scope rows ----
+# Drop rows where key columns are null/NA. For example, if a row has no
+# student ID or no school name, it's not usable.
+null_cols <- config$scope$drop_when_null
+
+cs_prepped <- cs_prepped |>
+  filter(if_all(all_of(null_cols), ~ !is.na(.) & . != "NULL"))
+```
+
+
+## Reinvestigate — profile after edits
+
+Re-profile the prepped data to confirm each edit did what you expected: school
+names populated, only the right schools remain, and `D_term` holds valid term
+values. Iterate the prep block until this looks right.
+
+```{r prep-profile}
+if (exists("cs_prepped")) {
+  explore_gt(explore_profile(cs_prepped), "After prep edits — re-profiled")
+} else {
+  htmltools::HTML(
+    "<em>Fill in the prep chunk above and set its eval to true, then re-render.</em>"
+  )
+}
+```
+
+```{r prep-peek}
+# ---- Re-inspect time columns after renaming ----
+# Now that columns have been renamed to D_ names, check that they look right.
+peek_cols <- c(
+  "D_term", "D_rotation", "D_period", "D_expression",
+  "D_stu_enter_date", "D_stu_exit_date"
+)
+
+if (!exists("cs_prepped")) {
+  htmltools::HTML("<em>cs_prepped not found — run the data prep steps above first.</em>")
+} else {
+  peek <- peek_cols[peek_cols %in% names(cs_prepped)]
+
+  if (length(peek) == 0) {
+    htmltools::HTML(
+      "<em>None of the named columns are present — adjust peek_cols to match the profile above.</em>"
+    )
+  } else {
+    explore_render(
+      setNames(
+        lapply(peek, function(col_name) explore_value_counts(cs_prepped, col_name, top = 40)),
+        peek
+      )
+    )
+  }
+}
+```
+
+## From here → promote the recipe
+
+Once the prepped profile looks right, promote each piece to its durable home so
+the pipeline is reusable, not one-off:
+
+- **Renames** → `column_map` in `district_config.yml`.
+- **Join** → a config location-join spec (source file · key · columns).
+- **Filter** → the Tier 1 schools-in-scope decision (config).
+- **Derivations** (like `D_term` from the course number) → a derivations block —
+  the thing `column_map` can't express, because these fields are computed.
+- **Demographics** → profile it here when it arrives; unlocks review check 0.6.
+
+```{r prep-export}
+#| eval: true
+
+# ---- Export the prepped data for Stage 02 ----
+# This is the handoff point: Stage 02 will pick up this file and apply
+# course coding + exclusion rules on top of it.
+if (exists("cs_prepped")) {
+  ers_write_sharepoint(
+    data = cs_prepped,
+    folder_path = raw_data_folder_path,
+    file_name_with_extension = "/2. Processed Data/01_course_data_post_explore.csv"
+  )
+} else {
+  message("cs_prepped not found — skipping export. Run the prep chunks above first.")
+}
+```
+
+```{r coding-export}
+#| eval: false
+
+# ---- Export a blank coding template ----
+# This creates the starting point for the course coding file.
+# Every course starts as "UNCODED" — a human (or AI-assisted process) fills in
+# the actual subject area, format, etc. Stage 02 merges this back in.
+#
+# You only need to run this ONCE to generate the template; after that,
+# the coding file lives on SharePoint and gets edited directly.
+
+coding_template <- cs_prepped |>
+  group_by(D_course_name, D_course_id) |>
+  count() |>
+  ungroup() |>
+  mutate(
+    C_course_time          = "UNCODED",
+    C_course_subject_area  = "UNCODED",
+    C_course_subject       = "UNCODED",
+    C_course_credit_type   = "UNCODED",
+    C_course_name          = "UNCODED",
+    C_course_rigor         = "UNCODED",
+    C_course_rigor_detail  = "UNCODED",
+    C_course_intervention  = "UNCODED",
+    C_course_time_of_day   = "UNCODED",
+    C_course_format        = "UNCODED",
+    C_course_pathway       = "UNCODED",
+    C_teacher_load_metric  = "UNCODED",
+    C_class_size_metric    = "UNCODED",
+    C_time_metric          = "UNCODED",
+    D_course_ell_flag      = "UNCODED",
+    D_course_swd_flag      = "UNCODED"
+  ) |>
+    select(-n)
+
+ers_write_sharepoint(
+  data = coding_template,
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = "/1. Coding/course_coding_template.csv"
+)
+```
