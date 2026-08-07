@@ -46,24 +46,24 @@
 # WHEN TO FILL IN: Before you run ANYTHING. Stage 01 won't work without this.
 # ===========================================================================
 
-district: Springfield Public Schools
-year: "2025-26"
+district: Metro Nashville Public Schools
+year: "2024-25"
 
 # The SharePoint folder path where all data for this district lives.
 # Everything below is relative to this path.
-raw_data_folder_path: "District Partners/Springfield MA/Springfield - 26 - HS Scheduling/1. Data & Analysis - Secure/For R"
-
+raw_data_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville"
 # File paths within that folder for each raw data source.
 raw_files:
-  cs_raw:              "/0. Raw Data/student_course_schedules.csv"
-  stu_demographics:    "/0. Raw Data/student_enrollment_and_demographic.xlsx"
+  cs_raw:              "/0. Raw Data/1. Course Schedule/Courses_Oct2024_FERPA.xlsx"
+  stu_demographics:    "/0. Raw Data/1. Course Schedule/Demographics_Oct2024_FERPA.xlsx"
+  hr_raw:              "/0. Raw Data/1. Course Schedule/HR_Aug2024_INDEMP.xlsx"
 
   # COURSE CODING FILE:
   # This file doesn't exist when you first start — you CREATE it during Stage 01
   # by exporting a blank template, then filling it in (manually or with AI help).
   # Once it's ready, put it in the /1. Coding folder and update this path.
   # Stage 02 will NOT work correctly until this file exists and is coded.
-  course_coding:       "/1. Coding/cs_course_coding.xlsx"
+  course_coding:       "/1. Coding/mnps_course_coding_24-25.xlsx"
 
 
 # ===========================================================================

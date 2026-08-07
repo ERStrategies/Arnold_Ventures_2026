@@ -9,7 +9,7 @@ format:
     embed-resources: true
     theme: cosmo
 execute:
-  echo: false
+  echo: true
   warning: false
   message: false
 ---
@@ -56,13 +56,11 @@ library(scales)
 
 ```{r setup-helpers-and-config}
 # Load helper functions for profiling/exploring data
-source(here::here("Tool Scripts - 2026 Updates", "helpers", "00_explore_helpers.R"))
-source(here::here("Tool Scripts - 2026 Updates", "helpers", "00_review_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "00_cs_explore_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "00_cs_review_helpers.R"))
 
 # Read the district config — tells us where to find files, how to rename columns, etc.
-config <- yaml::read_yaml(
-  here::here("Tool Scripts - 2026 Updates", "00_district_config.yml")
-)
+config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
 ```
 
@@ -119,7 +117,7 @@ course number.
 # ---- Which columns might represent time/scheduling? ----
 # Edit this list to match the column names you see in the profile above.
 # These are the ones we want to inspect more closely.
-peek_cols <- c("Term", "Rotation", "Period", "Expression", "Period Expression")
+peek_cols <- c("Term", "Rotation", "Period", "Expression", "Period Expression", "per", "term")
 
 peek <- peek_cols[peek_cols %in% names(cs_raw)]
 
@@ -154,11 +152,11 @@ right first. Fill in the `<...>` placeholders from the profiles above, then set
 this chunk's `eval` to `true`.
 
 ```{r prep}
-#| eval: true
+#| eval: false
 
 # Re-read config in case you've updated it between renders
 config <- yaml::read_yaml(
-  here::here("Tool Scripts - 2026 Updates", "00_district_config.yml")
+  here::here("config", "districts", "nashville.yaml")
 )
 
 # ---- Step 1: RENAME columns ----
