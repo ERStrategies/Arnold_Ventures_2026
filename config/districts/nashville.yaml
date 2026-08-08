@@ -64,6 +64,7 @@ raw_files:
   # Once it's ready, put it in the /1. Coding folder and update this path.
   # Stage 02 will NOT work correctly until this file exists and is coded.
   course_coding:       "/1. Coding/mnps_course_coding_24-25.xlsx"
+  location_coding:     "/1. Coding/mnps_high_schools.xlsx"
 
 
 # ===========================================================================
@@ -88,28 +89,24 @@ intake:
 
 column_map:
   course_schedule:
-    D_location_id:       Sch_ID
-    D_location_name:     Sch_Name
-    D_stu_id:            Stu_ID
-    D_room:              Room_Nu
-    D_course_id:         Crs_ID
-    D_course_name:       Crs_Name
-    D_course_section:    Section
-    D_period:            Period
-    D_term:              Term
-    D_expression:        Rotation      # Note: Springfield calls it "Rotation" but it's actually an expression
-    D_employee_id:       Teacher_ID
-    D_course_section_id: SECTIONID
-    D_year_id:           YEAR_ID
+    D_stu_id:            cid
+    D_location_id:       meno
+    D_course_id:         cou
+    D_employee_id:       emp
+    D_course_name:       ttl
+    D_course_section_id: sec
+    D_period:            per
+    D_term:              term
 
   demographics:
-    D_stu_id:            Stu_ID
-    D_school_year:       School_Year
-    D_stu_grade:         "Current Grade Level ID"
-    D_location_id:       "SIS School ID"
-    D_stu_swd_flag:      "Stu_SWD flag"
-    D_stu_ell_flag:      "Stu_ELL flag"
-    D_stu_poverty_flag:  "Stu_Poverty Flag"
+    D_stu_id:            cid
+    D_location_id:       meno
+    D_location_name:     SchoolName
+    D_stu_grade:         grdyr
+    D_stu_race:          raceEthn_federalDesignation
+    D_stu_ell_flag:      ell
+    D_stu_swd_flag:      sped
+    D_stu_poverty_flag:  ed
 
 
 # ===========================================================================
@@ -123,16 +120,15 @@ stu_demographics_join:
   key: D_stu_id
 
   # Which demographic columns to bring into the schedule data?
-  brings_in: [D_stu_grade, D_stu_swd_flag, D_stu_ell_flag, D_stu_poverty_flag]
+  brings_in: [D_stu_grade, D_stu_race, D_stu_ell_flag, D_stu_swd_flag, D_stu_poverty_flag]
 
   # Optional: recode raw values to something more usable.
   # For example, convert "Y"/"N" text to 1/0 numbers.
   # Delete or hash out this section if no recoding is needed.
-  recode:
-    D_stu_swd_flag: {"Y": 1, "N": 0}
-    D_stu_ell_flag: {"Y": 1, "N": 0}
-    D_stu_poverty_flag: {"Y": 1, "N": 0}
-
+  # recode:
+  #   D_stu_swd_flag: {"Y": 1, "N": 0}
+  #   D_stu_ell_flag: {"Y": 1, "N": 0}
+  #   D_stu_poverty_flag: {"Y": 1, "N": 0}
 
 # ===========================================================================
 # SECTION 5: SCOPE — Which rows to keep?
@@ -146,6 +142,10 @@ scope:
   # will cause rows to drop if you include demographic fields here.
   drop_when_null: ["D_stu_id", "D_stu_grade"]
 
+  # Additional row filters as R expressions. Rows that do NOT satisfy all
+  # expressions are dropped. Use standard R syntax.
+  filters: ["D_stu_grade >= 9"]
+
 
 # ===========================================================================
 # SECTION 6: CODING & EXCLUSIONS — What is each course, and what to exclude?
@@ -156,7 +156,7 @@ scope:
 
 coding:
   # Which column to join the coding file on (must exist in both cs_data and coding file)
-  join_key: D_course_name
+  join_key: D_course_id
 
   # Flag if more than this % of records are still "UNCODED" after the merge
   uncoded_flag_threshold_pct: 2
@@ -195,7 +195,7 @@ exclusions:
 class_id:
   # Which columns, combined, uniquely identify a single class?
   # Typically: school + time + teacher (and sometimes section ID).
-  recipe: [D_location_id, D_expression, D_term, D_course_section_id]
+  recipe: [D_location_id, D_period, D_term, D_course_section_id]
 
 
 # ===========================================================================
@@ -207,7 +207,7 @@ class_id:
 # Two options:
 #   "expression" = one column like "3(A-B)" that encodes period AND rotation together
 #   "period_rotation" = separate columns for period and rotation
-time_format: expression
+time_format: period_rotation
 
 time_cols:
   expression:      [D_expression]
@@ -228,16 +228,16 @@ weights:
   # TERM WEIGHTS: What fraction of the year does each term cover?
   # A full-year term = 1.0, a semester = 0.5, a quarter = 0.25, etc.
   # The keys here are the actual term values that appear in D_term.
-  term:          { 3500: 1.0,           3501: 0.5,       3502: 0.5 }
+  term:          { Q1: 0.25,      Q2: 0.25,      Q3: 0.25,      Q4: 0.25      }
 
   # TERM INTERVALS: What portion of the year does each term span? (0 = start, 1 = end)
   # Used to detect overlapping terms for double-booking.
-  term_interval: { 3500: [0, 1],        3501: [0, 0.5],  3502: [0.5, 1] }
+  term_interval: { Q1: [0, 0.25], Q2: [0.25, 0.5], Q3: [0.5, 0.75], Q4: [0.75, 1] }
 
   # TERM EXPANSION: Which sub-terms does each term cover?
   # A full-year term "expands" into both semesters; a semester expands into just itself.
   # Used so a full-year class can conflict with a semester class.
-  term_expands:  { 3500: [3501, 3502],  3501: [3501],    3502: [3502] }
+  term_expands:  { Q1: [Q1],      Q2: [Q2],      Q3: [Q3],      Q4: [Q4]      }
 
   # ROTATION WEIGHTS: What fraction of an A/B cycle does a rotation represent?
   # If a school alternates A/B days, each day = 0.5.
