@@ -156,7 +156,7 @@ scope:
 
 coding:
   # Which column to join the coding file on (must exist in both cs_data and coding file)
-  join_key: D_course_id
+  join_key: [D_course_id, D_course_name]
 
   # Flag if more than this % of records are still "UNCODED" after the merge
   uncoded_flag_threshold_pct: 2
@@ -195,7 +195,7 @@ exclusions:
 class_id:
   # Which columns, combined, uniquely identify a single class?
   # Typically: school + time + teacher (and sometimes section ID).
-  recipe: [D_location_id, D_period, D_term, D_course_section_id]
+  recipe: [D_location_id, D_employee_id, D_term, D_period, D_course_section_id]
 
 
 # ===========================================================================
@@ -240,18 +240,27 @@ weights:
   term_expands:  { Q1: [Q1],      Q2: [Q2],      Q3: [Q3],      Q4: [Q4]      }
 
   # ROTATION WEIGHTS: What fraction of an A/B cycle does a rotation represent?
-  # If a school alternates A/B days, each day = 0.5.
-  # Override specific school+expression combos if they differ (e.g., advisory meets less often).
+  # If a school alternates A/B days, each day = 0.5. If there is no rotation, each day = 1.0.
+  # Override specific school+meeting combos if they differ (e.g., advisory meets less often).
+  # Precedence: by_school > default.
   rotation:
-    default: 0.5
-    by_school:
-      "SCI TECH": { overrides: { "8@A": 0.2, "8@B": 0.2 } }   # advisory ~once/week
+    # For Nashville: they didn't provide rotation data, but we know all HSs have the same 7-period hybrid block schedule with no rotation.
+    default: 1
+    by_school: {}
+    
+    # For Springfield
+    # default: 0.5
+    # by_school:
+    #   "SCI TECH": { "8@A": 0.2, "8@B": 0.2 }   # advisory ~once/week
 
   # PERIOD WEIGHTS: How many "slots" does one period represent?
   # Usually 1.0. Set to 2.0 for true block periods (rare — use only if a school
   # has some periods that are literally twice as long as others).
+  # by_period overrides apply to ALL schools; by_school overrides apply to specific schools.
+  # Precedence: by_period > by_school > default.
   period:
     default: 1.0
+    by_period: { MISC: 0, CCR: 0 }
     by_school: {}
 
 
@@ -266,6 +275,11 @@ weights:
 # ===========================================================================
 
 bell_minutes:
+  # For Nashville: all HSs have the same hybrid block schedule.
+  # Minutes per period are averaged over the week (50 mins on M/W/F, 90 mins of either Tues or Thurs)
+  default: 48 
+  # For Springfield: the two HSs had different bell schedules, so we had to override by school.
+  # Leaving this here will not mess things up since there aren't any schools with D_location_name "PUTNAM" or "SCI TECH" in your data.
   by_school:
     "PUTNAM":   { default: 43 }
     "SCI TECH": { default: 90, overrides: { "8@A": 55, "8@B": 55 } }
@@ -281,11 +295,13 @@ bell_minutes:
 # the DB rate would be without certain records. They do NOT affect the actual data.
 # To use no filters, set: db_sizing_filters: []
 db_sizing_filters:
-  - { col: D_course_name,     op: in,     val: "VHS Anchor Year" }
+# - { col: D_course_name,     op: in,     val: "VHS Anchor Year" } # For Springfield
+  - { col: D_period,          op: in,     val: ["MISC", "CCR"] } # For Nashville
 
 # EXPRESSION GRAMMAR: How to parse D_expression into individual meetings.
 # "atoms" = named period slots (empty if periods are plain numbers like 1, 2, 3).
 # "rotations" = which token means which day(s). "A-B" means BOTH A and B days.
+# Example from Springfield
 expression:
   atoms: []
   expands: {}

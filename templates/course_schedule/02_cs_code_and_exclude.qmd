@@ -1,6 +1,5 @@
 ---
 title: "Course Schedule Processing — 02 · Coding & Exclusions Review"
-subtitle: "Springfield Public Schools · 2025-26"
 date: today
 format:
   html:
@@ -50,10 +49,10 @@ library(erstools)
 #   - review_helpers:  the tr_check / tr_stage framework for building the report
 #   - expression_helpers: parsing schedule expressions (period/rotation/day)
 #   - db_helpers: double-booking detection logic
-source(here::here("templates", "course_schedule", "helpers", "00_cs_explore_helpers.R"))
-source(here::here("templates", "course_schedule", "helpers", "00_cs_review_helpers.R"))
-source(here::here("templates", "course_schedule", "helpers", "00_cs_expression_helpers.R"))
-source(here::here("templates", "course_schedule", "helpers", "00_cs_db_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_explore_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_review_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "02_cs_db_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "02_cs_expression_helpers.R"))
 ```
 
 ```{r setup-config-and-data}
@@ -61,6 +60,12 @@ source(here::here("templates", "course_schedule", "helpers", "00_cs_db_helpers.R
 # column mappings, exclusion rules, term weights, class ID recipes, etc.
 config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
+```
+
+```{r subtitle}
+#| results: 'asis'
+#| echo: false
+cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
 
 # Connect to the SharePoint site where data lives.
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
@@ -76,8 +81,7 @@ cs_data <- ers_read_sharepoint(
 # Load the Claude-and-hand-coded course coding file.
 # This is a lookup table that tells us each course's subject area, format, etc.
 # Wrapped in tr_safe() so the document still renders even if the file doesn't exist yet.
-cs_course_coding <- tr_safe(
-  ers_read_sharepoint(
+cs_course_coding <- tr_safe(ers_read_sharepoint(
     folder_path = raw_data_folder_path,
     file_name_with_extension = config$raw_files$course_coding
   ),
@@ -178,20 +182,20 @@ sizing_filter_summary <- function(df, filters) {
 # - Was the key unique (no accidental row multiplication)?
 # - Did every course in the data match something in the coding file?
 
-join_key   <- if (!is.null(config$coding$join_key)) config$coding$join_key else "D_course_name"
+join_key   <- if (!is.null(config$coding$join_key)) unlist(config$coding$join_key) else "D_course_name"
 merge_diag <- NULL
 
 if (!is.null(cs_course_coding)) {
   cs_data <- tr_safe({
 
-    # Identify which columns the coding file brings in (everything except the key)
+    # Identify which columns the coding file brings in (everything except the join keys)
     coded_cols <- setdiff(names(cs_course_coding), join_key)
     coding_lookup <- cs_course_coding
     coding_lookup$.coded <- TRUE
 
     # Record state before the join
     n_before   <- nrow(cs_data)
-    key_unique <- !any(duplicated(coding_lookup[[join_key]]))
+    key_unique <- !any(duplicated(coding_lookup[, join_key]))
 
     # Perform the join: drop any old coded columns first, then bring in fresh ones
     joined <- cs_data |>
@@ -199,24 +203,20 @@ if (!is.null(cs_course_coding)) {
       left_join(coding_lookup, by = join_key)
 
     # Find rows that didn't match anything in the coding file
-    unmatched <- joined |> filter(is.na(.coded)) |> 
-      group_by(D_course_name, D_course_id) |> 
-      summarise(
-        n_records = n(),
-        .groups = "drop"
-      ) |> select(-n_records)
+    unmatched <- joined |>
+      filter(is.na(.coded)) |>
+      distinct(across(all_of(join_key)))
 
     # Save diagnostics for the check report later
     merge_diag <<- list(
-      key          = join_key,
+      key          = paste(join_key, collapse = " + "),
       key_unique   = key_unique,
       n_before     = n_before,
       n_after      = nrow(joined),
       row_stable   = identical(n_before, nrow(joined)),
-      n_unmatched  = nrow(unmatched),
+      n_unmatched  = nrow(joined |> filter(is.na(.coded))),
       unmatched_courses = as.data.frame(unmatched) |>
-        distinct(D_course_name) |>
-        arrange(D_course_name)
+        arrange(across(all_of(join_key)))
     )
 
     # Clean up and apply the exclusion rules from config
@@ -255,7 +255,7 @@ cs_size <- apply_sizing_filters(as.data.frame(cs_data), config$db_sizing_filters
 # "Explode" each row into one row per time-slot it covers.
 # A class that meets Mon/Wed periods 1-2 becomes 4 rows (Mon P1, Mon P2, Wed P1, Wed P2).
 # This lets us find overlaps by looking for duplicate student+timeslot combos.
-cs_long <- tr_safe(explode_conflicts(cs_size, spec, term_expands), NULL)
+cs_long <- tr_safe(explode_conflicts(cs_size, spec, term_expands, config), NULL)
 
 # Flag students who appear in 2+ classes in the same time-slot
 # (only among rows that are "Include" for time analysis).
@@ -408,13 +408,15 @@ s02 <- tr_stage(
         records_per_student <- included_data |>
           count(D_location_name, D_stu_id, name = "records_per_student")
 
+        time_cols <- time_key_cols(config)
+
         included_data |>
           group_by(D_location_name) |>
           summarise(
-            n_students    = n_distinct(D_stu_id),
-            n_teachers    = n_distinct(D_employee_id),
-            terms         = paste(sort(unique(na.omit(D_term))), collapse = ", "),
-            n_expressions = n_distinct(D_expression, na.rm = TRUE),
+            n_students   = n_distinct(D_stu_id),
+            n_teachers   = n_distinct(D_employee_id),
+            terms        = paste(sort(unique(na.omit(D_term))), collapse = ", "),
+            n_time_slots = n_distinct(!!!syms(time_cols)),
             .groups = "drop"
           ) |>
           left_join(
@@ -575,21 +577,21 @@ s02 <- tr_stage(
 
     # ================================================================
     # CHECK 2.7: Which time-slots have no real instruction?
-    # Some expressions (like "Lunch" or "Advisory") contain only
+    # Some time blocks (like "Lunch" or "Advisory") contain only
     # non-standard-format courses or very few distinct courses.
     # These should probably be excluded from time analysis.
     # ================================================================
-    tr_check("2.7", "Which expressions don't carry real instruction?",
+    tr_check("2.7", "Which time blocks don't carry real instruction?",
       good = "Time-slots that are entirely non-standard formats, or hold very few distinct courses, are identified so they fall out.",
       evidence = function() {
         # time_key_cols picks the right columns based on the schedule format:
         # either "D_expression" alone, or c("D_period", "D_rotation")
-        tcols <- time_key_cols(config)
+        time_cols <- time_key_cols(config)
 
         # Find time-slots where ZERO records are "Standard" format
         non_standard <- cs_data |>
           count(
-            across(all_of(c("D_location_name", tcols))),
+            across(all_of(c("D_location_name", time_cols))),
             C_course_format,
             name = "n_records"
           ) |>
@@ -599,7 +601,7 @@ s02 <- tr_stage(
             values_fill = 0
           ) |>
           filter(`Standard` == 0) |>
-          arrange(across(all_of(c("D_location_name", tcols))))
+          arrange(across(all_of(c("D_location_name", time_cols))))
 
         # Find time-slots with very few distinct courses (likely not real periods)
         max_courses <- if (!is.null(config$coding$max_unique_courses)) {
@@ -609,13 +611,13 @@ s02 <- tr_stage(
         }
 
         low_diversity <- cs_data |>
-          group_by(across(all_of(c("D_location_name", tcols)))) |>
+          group_by(across(all_of(c("D_location_name", time_cols)))) |>
           mutate(n_courses = n_distinct(D_course_name)) |>
           ungroup() |>
           filter(n_courses <= max_courses, !C_course_subject_area %in% c("Core", "Non-Core")) |>
           count(
-            across(all_of(c("D_location_name", tcols))),
-            D_course_name, n_courses,
+            across(all_of(c("D_location_name", time_cols))),
+            C_course_subject, D_course_name, n_courses,
             name = "n_records"
           ) |>
           arrange(D_location_name, n_courses, desc(n_records))
@@ -632,8 +634,8 @@ s02 <- tr_stage(
     # ================================================================
     # CHECK 2.8: What defines a "class" in this data?
     # The class ID is built from a recipe (e.g., course + section + term +
-    # expression). This shows a sample so you can verify classes aren't
-    # being over-split or under-split.
+    # expression OR period + rotation). This shows a sample so you can 
+    # verify classes aren't being over-split or under-split.
     # ================================================================
     tr_check("2.8", "Class ID — what defines a class here?",
       good  = "The recipe marks a place-in-time without over-splitting real classes.",
@@ -710,6 +712,13 @@ s02 <- tr_stage(
           mutate(pct_db = pct_of(n_db, n_teachers)) |>
           arrange(desc(pct_db))
 
+        time_cols <- time_key_cols(config)
+
+        # Helper: collapse time key cols into one readable string per row
+        time_slot_str <- function(df) {
+          apply(df[, time_cols, drop = FALSE], 1, function(r) paste(na.omit(r), collapse = "/"))
+        }
+
         # -- Sample student collisions (show actual conflicting rows) --
         # Find up to 10 student+timeslot combos that have >1 class
         student_collision_groups <- included_student_rows |>
@@ -723,11 +732,12 @@ s02 <- tr_stage(
           semi_join(student_collision_groups, by = c("D_stu_id", "M_conflict_key")) |>
           distinct(
             D_location_name, D_stu_id, M_conflict_key, C_class_id,
-            D_term, D_expression, D_course_section_id, D_course_name
+            D_term, across(all_of(time_cols)), D_course_section_id, D_course_name
           ) |>
+          mutate(time_slot = time_slot_str(pick(all_of(time_cols)))) |>
           arrange(D_location_name, D_stu_id, M_conflict_key) |>
-          transmute(
-            D_location_name, D_stu_id, D_term, D_expression,
+          select(
+            D_location_name, D_stu_id, D_term, time_slot,
             D_course_section_id, D_course_name, M_conflict_key
           )
 
@@ -735,15 +745,15 @@ s02 <- tr_stage(
         teacher_collision_rows <- included_teacher_rows |>
           distinct(
             D_location_name, D_employee_id, M_conflict_key,
-            C_class_id, D_stu_id, D_term, D_expression,
+            C_class_id, D_stu_id, D_term, across(all_of(time_cols)),
             D_course_section_id, D_course_name
           )
 
         teacher_collision_groups <- teacher_collision_rows |>
           group_by(D_location_name, D_employee_id, M_conflict_key) |>
           summarise(
-            n_classes        = n_distinct(C_class_id),
-            n_student_rows   = n(),
+            n_classes         = n_distinct(C_class_id),
+            n_student_rows    = n(),
             n_unique_students = n_distinct(D_stu_id),
             .groups = "drop"
           ) |>
@@ -755,10 +765,11 @@ s02 <- tr_stage(
             teacher_collision_groups,
             by = c("D_location_name", "D_employee_id", "M_conflict_key")
           ) |>
+          mutate(time_slot = time_slot_str(pick(all_of(time_cols)))) |>
           group_by(D_location_name, D_employee_id, M_conflict_key, C_class_id) |>
           summarise(
             D_term              = paste(sort(unique(na.omit(D_term))), collapse = ", "),
-            D_expression        = paste(sort(unique(na.omit(D_expression))), collapse = ", "),
+            time_slot           = paste(sort(unique(na.omit(time_slot))), collapse = ", "),
             D_course_section_id = paste(sort(unique(na.omit(D_course_section_id))), collapse = ", "),
             D_course_name       = paste(sort(unique(na.omit(D_course_name))), collapse = " | "),
             n_students_in_class = n_distinct(D_stu_id),
@@ -775,7 +786,7 @@ s02 <- tr_stage(
             D_employee_id, M_conflict_key, desc(n_students_in_class)
           ) |>
           select(
-            D_location_name, D_employee_id, D_term, D_expression,
+            D_location_name, D_employee_id, D_term, time_slot,
             D_course_section_id, D_course_name, M_conflict_key,
             n_students_in_class, n_student_rows, n_unique_students
           )
@@ -872,7 +883,7 @@ htmltools::browsable(render_stage(s02))
 ## Re-export for the next stage
 
 ```{r export}
-#| eval: false
+#| eval: true
 
 # Save the updated data (now with coding + exclusion columns) for Stage 03.
 ers_write_sharepoint(
@@ -883,7 +894,7 @@ ers_write_sharepoint(
 ```
 
 ```{r unmatched export}
-#| eval: true
+#| eval: false
 
 # Save the updated data (now with coding + exclusion columns) for Stage 03.
 ers_write_sharepoint(

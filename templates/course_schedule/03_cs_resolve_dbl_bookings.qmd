@@ -1,0 +1,422 @@
+---
+title: "Course Schedule Processing — 03 · Weights, Minutes & DB Resolution"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    theme: cosmo
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+<!---
+## What this file does (high level)
+
+This is Stage 03 of the course schedule pipeline. It picks up the coded +
+excluded data from Stage 02 and does two things:
+
+1. Derives **class weights** and **class minutes** for each record.
+2. Produces a "before resolution" snapshot of double-booking so we can
+   see the starting point before any adjustments are made.
+
+Key concepts:
+- **Weight** = a dimensionless number representing what fraction of a full
+  schedule this class occupies (based on term length × rotation × periods).
+  Think of it as "how big a slice of the pie is this class?"
+- **Minutes** = actual clock time from the bell schedule (e.g., 43 min or 90 min).
+- **Weight × Minutes** = real instructional time for a class.
+- **Double-booking resolution** (done in the NEXT pass) = adjusting weights
+  when a student or teacher is scheduled in 2+ classes at the same time.
+--->
+
+
+```{r setup-libraries}
+# Start fresh and load packages
+rm(list = ls())
+library(gt)
+library(dplyr)
+library(tidyr)
+library(glue)
+library(yaml)
+library(Microsoft365R)
+library(erstools)
+```
+
+```{r setup-helpers}
+# Load helper functions shared across stages
+source(here::here("templates", "course_schedule", "helpers", "01_cs_explore_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_review_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "02_cs_db_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "02_cs_expression_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_resolution_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_weight_helpers.R"))
+```
+
+```{r setup-config-and-data}
+# Read the district config (drives everything: weights, bell schedule, etc.)
+config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
+
+# "spec" tells us how schedule expressions are structured (days, periods, rotations)
+# "term_expands" tells us how terms map to time-slots for conflict detection
+spec         <- expr_spec(config)
+term_expands <- term_expands_spec(config)
+
+raw_data_folder_path <- config$raw_data_folder_path
+```
+
+```{r subtitle}
+#| results: 'asis'
+#| echo: false
+cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
+
+# Connect to SharePoint
+orgfiles_site <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/orgfiles")
+internal_drive <- orgfiles_site$get_drive("Internal")
+
+# Load Stage 02 output (coded + exclusions applied).
+# Wrapped in tr_safe() so this file renders even if 02 hasn't been exported yet.
+cs_data <- tr_safe(ers_read_sharepoint(
+    folder_path = raw_data_folder_path,
+    file_name_with_extension = "/2. Processed Data/02_cs_data_post_code_and_exclude.csv"
+  ),
+  otherwise = NULL
+)
+```
+
+```{r derive-weights-and-minutes}
+# ---- Build class weights and minutes ----
+# For each record, we calculate:
+#   M_cls_class_weight  = term_weight × rotation_weight × period_weight
+#                         (e.g., a full-year class meeting every day for 1 period = 1.0)
+#   M_cls_class_minutes = clock time from the bell schedule
+#
+# These are properties of the CLASS (not the student), so they're the same
+# for every student in a given class.
+
+cs_data <- tr_safe({
+  cs_data$C_class_id <- build_class_id(cs_data, config$class_id$recipe)
+  derive_class_weight_minutes(cs_data, config, spec)
+}, otherwise = cs_data)
+
+# ---- Initialize student and teacher weight "views" ----
+# Before resolution, every student/teacher gets the full class weight.
+# After resolution (next pass), double-booked students/teachers will get
+# ADJUSTED weights (split between their overlapping classes).
+#
+# We keep three separate weight columns:
+#   M_cls_class_weight  = the class's intrinsic weight (never changes)
+#   M_stu_class_weight  = the weight from the STUDENT's perspective (adjusted during resolution)
+#   M_tch_class_weight  = the weight from the TEACHER's perspective (adjusted during resolution)
+
+cs_data$M_stu_class_weight <- tr_safe(cs_data$M_cls_class_weight, NA)
+cs_data$M_tch_class_weight <- tr_safe(cs_data$M_cls_class_weight, NA)
+```
+
+```{r detect-double-bookings-before-resolution}
+# ---- "Before" double-booking snapshot ----
+# This measures how much double-booking exists BEFORE any resolution.
+# We'll compare this to the "after" picture once resolution runs.
+
+# Explode each row into individual time-slots (same logic as Stage 02)
+cs_long <- tr_safe(
+  explode_conflicts(cs_data, spec, term_expands, config),
+  NULL
+)
+
+# resolution: student weights (meeting-level 1/N split)
+resolved_stu <- tr_safe(resolve_student_weights(cs_long, config), NULL)
+if (!is.null(resolved_stu)) {
+  cs_data <- cs_data |>
+    select(-any_of("M_stu_class_weight")) |>          # drop the pass-1 placeholder
+    left_join(resolved_stu |> select(D_stu_id, C_class_id, M_stu_class_weight),
+              by = c("D_stu_id", "C_class_id"))
+}
+# fall back to base class weight where resolution didn't apply (excluded / no conflict)
+cs_data$M_stu_class_weight <- ifelse(is.na(cs_data$M_stu_class_weight),
+                                     cs_data$M_cls_class_weight, cs_data$M_stu_class_weight)
+
+# Find students scheduled in 2+ classes at the same time
+flagged_students <- tr_safe(
+  unique(
+    db_flagged(
+      filter(cs_long, C_course_time_exclude == "Include"),
+      "D_stu_id",
+      "C_class_id"
+    )$D_stu_id
+  ),
+  character(0)
+)
+
+# Find teachers scheduled in 2+ classes at the same time
+flagged_teachers <- tr_safe(
+  unique(
+    db_flagged(
+      filter(cs_long, C_class_size_and_teacher_load_exclude == "Include"),
+      "D_employee_id",
+      "C_class_id"
+    )$D_employee_id
+  ),
+  character(0)
+)
+
+# Helper: calculate a percentage safely (returns NA if denominator is 0 or missing)
+pct_of <- function(a, b) {
+  result <- round(100 * a / b, 1)
+  result[is.na(b) | b == 0] <- NA_real_
+  result
+}
+```
+
+## How to read this
+
+This stage derives the two things double-booking resolution needs and keeps
+them **rigorously separate**:
+
+- **Weight** — a *dimensionless share* (`term x rotation x period`). It drives
+  resolution (how to split shared time) and only has meaning once multiplied by
+  minutes. It does **not** measure course count or full load.
+- **Minutes** — *real clock time* from the bell schedule. The units.
+
+`weight x minutes` is where real instructional time lands. This pass builds and
+validates both, plus the "before" DB picture. **Resolution comes next** — here
+you're confirming the foundation is sound.
+
+## 03 — Weights, minutes & the pre-resolution picture
+
+```{r stage03}
+#| results: 'asis'
+
+# ---- Build the stage report ----
+# Each check validates a piece of the weight/minutes/DB foundation.
+
+s03 <- tr_stage(
+  number = "03",
+  title  = "Weights, Minutes & DB Resolution",
+  question = "Are the class weights and minutes right, and how big is the problem before we resolve it?",
+  checks = list(
+
+    # ================================================================
+    # CHECK 3.0: Do the computed weights and minutes look right?
+    # Shows a handful of real classes so you can verify by hand:
+    #   - Does the weight make sense for that term/expression combo?
+    #   - Does the minutes value match the bell schedule?
+    # ================================================================
+    tr_check("3.0", "Class weight & minutes — do a few real classes look right?",
+      good  = "term x rotation x period reconciles by hand; minutes come from the bell schedule; the two are separate.",
+      evidence = function() {
+        # Pick 10 classes with distinct weight values (to show variety)
+        sample_classes <- cs_data |>
+          filter(!is.na(C_class_id)) |>
+          distinct(
+            C_class_id, D_location_name, D_expression, D_term,
+            D_course_name, M_cls_class_weight, M_cls_class_minutes
+          ) |>
+          distinct(M_cls_class_weight, .keep_all = TRUE) |>
+          slice_sample(n = 10) |>
+          arrange(desc(M_cls_class_weight)) |>
+          # "serialized" shows the parsed expression in a readable form
+          # (e.g., "Mon P1, Mon P2, Wed P1, Wed P2")
+          mutate(
+            serialized = vapply(
+              D_expression,
+              function(expr) serialize_meetings(parse_expression(expr, spec)),
+              character(1)
+            )
+          ) |>
+          transmute(
+            D_location_name,
+            expression = D_expression,
+            serialized,
+            D_term,
+            course = D_course_name,
+            M_cls_class_weight,
+            M_cls_class_minutes
+          )
+
+        sample_classes
+      }
+    ),
+
+    # ================================================================
+    # CHECK 3.1: Are per-person weight totals sensible?
+    # Each student's total weight should reflect how many periods they
+    # have in a day. E.g., an 8-period school ≈ 8.0, a 4-block school ≈ 4.0.
+    # Same logic for teachers.
+    # ================================================================
+    tr_check("3.1", "Weight per student & per teacher — sane by school?",
+      good  = "Sums reflect the schedule structure (e.g. Sci-Tech ~4 blocks, Putnam ~8 periods) — NOT forced to a single target.",
+      evidence = function() {
+
+        # Sum each student's class weights across their schedule
+        student_weight_summary <- cs_data |>
+          filter(C_course_time_exclude == "Include") |>
+          distinct(D_location_name, D_stu_id, C_class_id, M_stu_class_weight) |>
+          group_by(D_location_name, D_stu_id) |>
+          summarise(
+            total_weight = sum(M_stu_class_weight, na.rm = TRUE),
+            .groups = "drop"
+          ) |>
+          group_by(D_location_name) |>
+          summarise(
+            n_students = n_distinct(D_stu_id),
+            avg_weight_per_student = round(mean(total_weight), 2),
+            .groups = "drop"
+          )
+
+        # Sum each teacher's class weights across their schedule
+        teacher_weight_summary <- cs_data |>
+          filter(C_class_size_and_teacher_load_exclude == "Include") |>
+          distinct(D_location_name, D_employee_id, C_class_id, M_tch_class_weight) |>
+          group_by(D_location_name, D_employee_id) |>
+          summarise(
+            total_weight = sum(M_tch_class_weight, na.rm = TRUE),
+            .groups = "drop"
+          ) |>
+          group_by(D_location_name) |>
+          summarise(
+            n_teachers = n_distinct(D_employee_id),
+            avg_weight_per_teacher = round(mean(total_weight), 2),
+            .groups = "drop"
+          )
+
+        list(
+          "Avg weight per student, by school" = student_weight_summary,
+          "Avg weight per teacher, by school" = teacher_weight_summary
+        )
+      }
+    ),
+
+    # ================================================================
+    # CHECK 3.2: Does weight × minutes give comparable real time across schools?
+    # A 4-block school with 90-min blocks and an 8-period school with
+    # 43-min periods should produce similar total instructional minutes.
+    # ================================================================
+    tr_check("3.2", "Minutes layer (separate) — instructional time, by school",
+      good  = "Avg weight and avg minutes per cycle shown side by side — weight x minutes should be comparable across schools (e.g., Sci-Tech 4.2 x 90 ~ Putnam 8.0 x 43).",
+      evidence = function() {
+        cs_data |>
+          filter(C_course_time_exclude == "Include") |>
+          distinct(
+            D_location_name, D_stu_id, C_class_id,
+            M_stu_class_weight, M_cls_class_minutes
+          ) |>
+          group_by(D_location_name, D_stu_id) |>
+          summarise(
+            total_weight = sum(M_stu_class_weight, na.rm = TRUE),
+            total_minutes_per_cycle = sum(M_cls_class_minutes, na.rm = TRUE),
+            .groups = "drop"
+          ) |>
+          group_by(D_location_name) |>
+          summarise(
+            avg_weight = round(mean(total_weight), 1),
+            avg_minutes_per_cycle = round(mean(total_minutes_per_cycle), 0),
+            .groups = "drop"
+          )
+      }
+    ),
+
+    # ================================================================
+    # CHECK 3.3: The "before resolution" snapshot
+    # This captures the starting state so we can compare to "after" once
+    # resolution runs. It shows:
+    #   - How many students/teachers are double-booked
+    #   - Average class size
+    #   - Average weight per student/teacher
+    # The "after" column will be filled in by the resolution pass.
+    # ================================================================
+    tr_check("3.3", "Before-resolution snapshot (the 'XYZ' of XYZ -> ABC)",
+      good  = "The starting picture: DBs by type + avg class size + avg weights, unresolved. 'After' fills in once resolution runs.",
+      value = tr_safe(
+        glue(
+          "students {pct_of(length(flagged_students), n_distinct(cs_data$D_stu_id[cs_data$C_course_time_exclude=='Include']))}% \u00B7 ",
+          "teachers {pct_of(length(flagged_teachers), n_distinct(cs_data$D_employee_id[cs_data$C_class_size_and_teacher_load_exclude=='Include']))}%"
+        ),
+        NA
+      ),
+      evidence = function() {
+
+        # Calculate average class size (how many students per class)
+        avg_class_size <- cs_data |>
+          filter(C_class_size_and_teacher_load_exclude == "Include") |>
+          distinct(C_class_id, D_stu_id) |>
+          count(C_class_id, name = "size") |>
+          summarise(value = round(mean(size), 1)) |>
+          pull(value)
+
+        # Calculate average total weight per student
+        avg_student_weight <- cs_data |>
+          filter(C_course_time_exclude == "Include") |>
+          distinct(D_stu_id, C_class_id, M_stu_class_weight) |>
+          group_by(D_stu_id) |>
+          summarise(total_weight = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop") |>
+          summarise(value = round(mean(total_weight), 2)) |>
+          pull(value)
+
+        # Calculate average total weight per teacher
+        avg_teacher_weight <- cs_data |>
+          filter(C_class_size_and_teacher_load_exclude == "Include") |>
+          distinct(D_employee_id, C_class_id, M_tch_class_weight) |>
+          group_by(D_employee_id) |>
+          summarise(total_weight = sum(M_tch_class_weight, na.rm = TRUE), .groups = "drop") |>
+          summarise(value = round(mean(total_weight), 2)) |>
+          pull(value)
+
+        # Count how many students/teachers are in the "included" pool
+        n_included_students <- n_distinct(
+          cs_data$D_stu_id[cs_data$C_course_time_exclude == "Include"]
+        )
+        n_included_teachers <- n_distinct(
+          cs_data$D_employee_id[cs_data$C_class_size_and_teacher_load_exclude == "Include"]
+        )
+
+        data.frame(
+          metric = c(
+            "Students double-booked",
+            "Teachers double-booked",
+            "Avg class size",
+            "Avg weight / student",
+            "Avg weight / teacher"
+          ),
+          before = c(
+            paste0(length(flagged_students), " (", pct_of(length(flagged_students), n_included_students), "%)"),
+            paste0(length(flagged_teachers), " (", pct_of(length(flagged_teachers), n_included_teachers), "%)"),
+            avg_class_size,
+            avg_student_weight,
+            avg_teacher_weight
+          ),
+          after = rep("pending resolution", 5),
+          stringsAsFactors = FALSE
+        )
+      }
+    ),
+        tr_check("3.4", "Student resolution — weight reclaimed from double-bookings",
+      good = "After the meeting-level split, avg student weight drops only by the double-booked share (small if DBs are rare).",
+      value = tr_safe({
+        ba <- cs_data |> filter(C_course_time_exclude == "Include") |>
+          group_by(D_stu_id) |>
+          summarise(b = sum(M_cls_class_weight, na.rm = TRUE),
+                    a = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop")
+        glue("avg {round(mean(ba$b),2)} -> {round(mean(ba$a),2)} per student")
+      }, NA),
+      evidence = function() {
+        cs_data |> filter(C_course_time_exclude == "Include") |>
+          group_by(D_location_name, D_stu_id) |>
+          summarise(before = sum(M_cls_class_weight, na.rm = TRUE),
+                    after  = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop") |>
+          group_by(D_location_name) |>
+          summarise(n_students        = n_distinct(D_stu_id),
+                    avg_weight_before = round(mean(before), 2),
+                    avg_weight_after  = round(mean(after), 2),
+                    weight_reclaimed  = round(mean(before) - mean(after), 3), .groups = "drop")
+      })
+  )
+)
+
+htmltools::browsable(render_stage(s03))
+```
+
+*Next (pass 2) -> resolution: class 100%-DB weight adjustment, teacher consolidate/load-off (union + serialized expression), student-weight adjustment, then the "after" column fills in and we re-export.*

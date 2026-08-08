@@ -42,15 +42,20 @@ conflict_keys <- function(expr, term, spec, term_expands) {
 }
 
 # long form: one row per (record, conflict key). Keys computed once per distinct
-# (expression, term) combo, then joined — fast on large data.
-explode_conflicts <- function(df, spec, term_expands,
-                              expr_col = "D_expression", term_col = "D_term") {
-  df <- as.data.frame(df)   # robust to data.table's non-standard `[, j]`
-  combos <- unique(df[, c(expr_col, term_col), drop = FALSE])
-  combos[[".ckey"]] <- Map(function(e, t) conflict_keys(e, t, spec, term_expands),
-                           combos[[expr_col]], combos[[term_col]])
+# (time cols, term) combo, then joined — fast on large data.
+explode_conflicts <- function(df, spec, term_expands, config,
+                              term_col = "D_term") {
+  time_cols <- time_key_cols(config)
+  df <- as.data.frame(df)
+  combos <- unique(df[, c(time_cols, term_col), drop = FALSE])
+  combos[[".ckey"]] <- lapply(seq_len(nrow(combos)), function(i) {
+    m  <- record_meetings(as.list(combos[i, time_cols]), config, spec)
+    if (!length(m)) return(character(0))
+    ts <- term_slots(combos[[term_col]][i], term_expands)
+    as.vector(outer(m, ts, function(a, b) paste0(a, "|", b)))
+  })
   df |>
-    left_join(combos, by = c(expr_col, term_col)) |>
+    left_join(combos[, c(time_cols, term_col, ".ckey")], by = c(time_cols, term_col)) |>
     unnest_longer(".ckey", values_to = "M_conflict_key")
 }
 

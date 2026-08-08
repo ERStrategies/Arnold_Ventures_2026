@@ -1,6 +1,5 @@
 ---
 title: "Course Schedule Processing — Step 1: Explore"
-subtitle: "Config-free data profiling"
 date: today
 format:
   html:
@@ -56,12 +55,18 @@ library(scales)
 
 ```{r setup-helpers-and-config}
 # Load helper functions for profiling/exploring data
-source(here::here("templates", "course_schedule", "helpers", "00_cs_explore_helpers.R"))
-source(here::here("templates", "course_schedule", "helpers", "00_cs_review_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_explore_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_review_helpers.R"))
 
 # Read the district config — tells us where to find files, how to rename columns, etc.
 config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
+```
+
+```{r subtitle}
+#| results: 'asis'
+#| echo: false
+cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
 ```
 
 ```{r load-raw-data}
@@ -80,16 +85,14 @@ cs_raw <- ers_read_sharepoint(
 # Load student demographic data (SWD, ELL, FRL, race, etc.)
 # This will be merged onto the course schedule during prep.
 # Wrapped in tr_safe() so the doc renders even if the file doesn't exist yet.
-stu_demographics <- tr_safe(
-  ers_read_sharepoint(
+stu_demographics <- tr_safe(ers_read_sharepoint(
     folder_path = raw_data_folder_path,
     file_name_with_extension = config$raw_files$stu_demographics
   ),
   otherwise = NULL
 )
 
-location_coding <- tr_safe(
-  ers_read_sharepoint(
+location_coding <- tr_safe(ers_read_sharepoint(
     folder_path = raw_data_folder_path,
     file_name_with_extension = config$raw_files$location_coding
   ),
@@ -227,7 +230,8 @@ cs_prepped <- cs_prepped |>
   mutate(
     D_stu_ell_flag     = ifelse(is.na(D_stu_ell_flag),     0, D_stu_ell_flag),
     D_stu_swd_flag     = ifelse(is.na(D_stu_swd_flag),     0, D_stu_swd_flag),
-    D_stu_poverty_flag = ifelse(is.na(D_stu_poverty_flag), 0, D_stu_poverty_flag)
+    D_stu_poverty_flag = ifelse(is.na(D_stu_poverty_flag), 0, D_stu_poverty_flag),
+    D_rotation         = "A"
   )
 ```
 
@@ -252,9 +256,7 @@ if (exists("cs_prepped")) {
 # ---- Re-inspect time columns after renaming ----
 # Now that columns have been renamed to D_ names, check that they look right.
 peek_cols <- c(
-  "D_term", "D_rotation", "D_period", "D_expression",
-  "D_stu_enter_date", "D_stu_exit_date"
-)
+  "D_term", "D_rotation", "D_period", "D_expression", "D_location_name", "D_stu_grade")
 
 if (!exists("cs_prepped")) {
   htmltools::HTML("<em>cs_prepped not found — run the data prep steps above first.</em>")
