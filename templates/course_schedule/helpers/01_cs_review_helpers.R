@@ -123,19 +123,19 @@ tr_decision_block <- function(chk, disabled = FALSE) {
     htmltools::tags$span(style = "color:#475467;font-size:12px;", paste0("  \u2014  ", tr_fmt_value(chk$value)))
   else NULL
 
-  good <- if (!is.na(chk$good) && nzchar(chk$good))
+  good <- if (isTRUE(!is.na(chk$good) && nzchar(chk$good)))
     htmltools::tags$div(style = "color:#667085;font-size:12px;margin-top:3px;",
              htmltools::tags$span(style = paste0(.tr_lbl, "color:#98a2b3;"), "good \u00B7 "), chk$good)
   else NULL
 
   # only render the "recorded" line when there's something recorded
-  recorded <- if (!is.na(chk$records) && nzchar(chk$records))
+  recorded <- if (isTRUE(!is.na(chk$records) && nzchar(chk$records)))
     htmltools::tags$div(style = "font-size:13px;margin-top:4px;color:#1d2939;",
              htmltools::tags$span(style = paste0(.tr_lbl, "color:#667085;"), "recorded \u00B7 "),
              tr_fmt_value(chk$records))
   else NULL
 
-  note <- if (!is.na(chk$note) && nzchar(chk$note))
+  note <- if (isTRUE(!is.na(chk$note) && nzchar(chk$note)))
     htmltools::tags$div(style = paste0("margin-top:5px;background:#fff7ed;border-left:3px solid #f79009;",
                             "padding:4px 8px;color:#7a4708;font-size:12px;"),
              htmltools::tags$span(style = "font-weight:600;", "note \u00B7 "), chk$note)

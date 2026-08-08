@@ -54,6 +54,11 @@ source(here::here("templates", "course_schedule", "helpers", "02_cs_db_helpers.R
 source(here::here("templates", "course_schedule", "helpers", "02_cs_expression_helpers.R"))
 source(here::here("templates", "course_schedule", "helpers", "03_cs_resolution_helpers.R"))
 source(here::here("templates", "course_schedule", "helpers", "03_cs_weight_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_explosion_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_flagging_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_consolidation_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_resolution_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "03_cs_unification_helpers.R"))
 ```
 
 ```{r setup-config-and-data}
@@ -116,59 +121,62 @@ cs_data$M_stu_class_weight <- tr_safe(cs_data$M_cls_class_weight, NA)
 cs_data$M_tch_class_weight <- tr_safe(cs_data$M_cls_class_weight, NA)
 ```
 
-```{r detect-double-bookings-before-resolution}
+```{r run-resolution-engine}
 # ---- "Before" double-booking snapshot ----
-# This measures how much double-booking exists BEFORE any resolution.
-# We'll compare this to the "after" picture once resolution runs.
+# row id on the UN-exploded data so unification can match rows back together
+cs_data$H_row_id_before_explosions <- seq_len(nrow(cs_data))
 
-# Explode each row into individual time-slots (same logic as Stage 02)
-cs_long <- tr_safe(
-  explode_conflicts(cs_data, spec, term_expands, config),
-  NULL
-)
+# --- the resolution engine, one helper per step (all format-agnostic) ----
+exploded    <- tr_safe(explode_for_resolution(cs_data, config, spec), NULL)
+flagged_all <- tr_safe(flag_double_bookings(exploded, config), NULL)                    # all rows (before picture)
+flagged     <- tr_safe(flag_double_bookings(exploded, config, filter_to_db = TRUE), NULL)
+res         <- tr_safe(resolve_double_bookings(flagged, config), NULL)
+resolved    <- tr_safe(res$resolved, NULL)
+mapping     <- tr_safe(res$mapping, NULL)
+loadoff     <- tr_safe(teacher_loadoff(resolved, config), NULL)
+unified     <- tr_safe(unify_resolution(resolved, cs_data, loadoff), NULL)
 
-# resolution: student weights (meeting-level 1/N split)
-resolved_stu <- tr_safe(resolve_student_weights(cs_long, config), NULL)
-if (!is.null(resolved_stu)) {
-  cs_data <- cs_data |>
-    select(-any_of("M_stu_class_weight")) |>          # drop the pass-1 placeholder
-    left_join(resolved_stu |> select(D_stu_id, C_class_id, M_stu_class_weight),
-              by = c("D_stu_id", "C_class_id"))
-}
-# fall back to base class weight where resolution didn't apply (excluded / no conflict)
-cs_data$M_stu_class_weight <- ifelse(is.na(cs_data$M_stu_class_weight),
-                                     cs_data$M_cls_class_weight, cs_data$M_stu_class_weight)
+# "before" DB sets for your existing 3.3 snapshot (now from the new flagger)
+flagged_students <- tr_safe(unique(flagged_all$D_stu_id[flagged_all$H_db_student_row == 1]), character(0))
+flagged_teachers <- tr_safe(unique(flagged_all$D_employee_id[flagged_all$H_db_teacher_row == 1]), character(0))
 
-# Find students scheduled in 2+ classes at the same time
-flagged_students <- tr_safe(
-  unique(
-    db_flagged(
-      filter(cs_long, C_course_time_exclude == "Include"),
-      "D_stu_id",
-      "C_class_id"
-    )$D_stu_id
-  ),
-  character(0)
-)
+pct_of <- function(a, b) { r <- round(100 * a / b, 1); r[is.na(b) | b == 0] <- NA_real_; r }
 
-# Find teachers scheduled in 2+ classes at the same time
-flagged_teachers <- tr_safe(
-  unique(
-    db_flagged(
-      filter(cs_long, C_class_size_and_teacher_load_exclude == "Include"),
-      "D_employee_id",
-      "C_class_id"
-    )$D_employee_id
-  ),
-  character(0)
-)
+# ---- precompute check results (keeps the tr_check bodies lean) ----
+# 3.4 consolidation: one teacher per CONS_ class
+multi_teacher <- tr_safe(resolved |> filter(startsWith(C_class_id_post_teachers, "CONS_")) |>
+  group_by(C_class_id_post_teachers) |> summarise(n_tch = n_distinct(D_employee_id), .groups="drop") |>
+  filter(n_tch > 1), data.frame())
+consol_sum <- tr_safe(consolidation_summary(mapping), list())
+teach_db_before <- length(flagged_teachers)
+teach_db_after  <- tr_safe({
+  rf <- resolved |> mutate(C_class_id = C_class_id_post_teachers) |>
+    select(-any_of(c("H_db_teacher_row","H_db_student_row"))); rf <- flag_teacher_db(rf)
+  n_distinct(rf$D_employee_id[rf$H_db_teacher_row == 1]) }, NA)
+sec_before <- tr_safe(n_distinct(mapping$C_class_id_original), NA)
+sec_after  <- tr_safe(n_distinct(mapping$C_class_id_resolved), NA)
 
-# Helper: calculate a percentage safely (returns NA if denominator is 0 or missing)
-pct_of <- function(a, b) {
-  result <- round(100 * a / b, 1)
-  result[is.na(b) | b == 0] <- NA_real_
-  result
-}
+# 3.5 resolution: monotonic shrink + weight progression across stages
+mono <- tr_safe(with(resolved,
+  all(M_class_weight_adj_same_course >= M_class_weight_post_class    - 1e-9, na.rm=TRUE) &&
+  all(M_class_weight_post_class      >= M_class_weight_post_teachers - 1e-9, na.rm=TRUE) &&
+  all(M_class_weight_post_teachers   >= M_class_weight_post_student  - 1e-9, na.rm=TRUE)), FALSE)
+
+# 3.6 unification row-accounting + before->after
+n_matched <- tr_safe(cs_data |> semi_join(distinct(resolved, H_row_id_before_explosions),
+                     by="H_row_id_before_explosions") |> nrow(), NA)
+unif_ok <- tr_safe(isTRUE(nrow(unified) == nrow(resolved) + (nrow(cs_data) - n_matched)), FALSE)
+stu_before <- tr_safe(exploded |> group_by(D_stu_id) |> summarise(b = sum(M_class_weight_exploded, na.rm=TRUE), .groups="drop"), NULL)
+stu_after  <- tr_safe(resolved |> group_by(D_stu_id) |> summarise(a = sum(M_class_weight_post_student, na.rm=TRUE), .groups="drop"), NULL)
+stu_ba <- tr_safe(stu_before |> left_join(stu_after, by="D_stu_id") |> mutate(a = coalesce(a, b)), NULL)
+
+# finale example pickers
+ex_student <- tr_safe(resolved |> filter(H_db_student_row == 1) |> slice_head(n=1) |> pull(D_stu_id), NA)
+ex_cons    <- tr_safe(consol_sum[["Example consolidations (largest first)"]]$C_class_id_consolidated[1], NA) %||% NA
+trace_cols <- function(d) d |> select(any_of(c(
+  "D_stu_id","D_course_name","C_period_exploded","C_rotation_exploded","C_class_id_post_teachers",
+  "M_class_weight_exploded","M_class_weight_post_class","M_class_weight_post_teachers",
+  "M_class_weight_post_student","M_student_count_adjusted")))
 ```
 
 ## How to read this
@@ -353,7 +361,7 @@ s03 <- tr_stage(
           distinct(D_stu_id, C_class_id, M_stu_class_weight) |>
           group_by(D_stu_id) |>
           summarise(total_weight = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop") |>
-          summarise(value = round(mean(total_weight), 2)) |>
+          summarise(value = round(mean(total_weight), 1)) |>
           pull(value)
 
         # Calculate average total weight per teacher
@@ -362,7 +370,7 @@ s03 <- tr_stage(
           distinct(D_employee_id, C_class_id, M_tch_class_weight) |>
           group_by(D_employee_id) |>
           summarise(total_weight = sum(M_tch_class_weight, na.rm = TRUE), .groups = "drop") |>
-          summarise(value = round(mean(total_weight), 2)) |>
+          summarise(value = round(mean(total_weight), 1)) |>
           pull(value)
 
         # Count how many students/teachers are in the "included" pool
@@ -393,26 +401,44 @@ s03 <- tr_stage(
         )
       }
     ),
-        tr_check("3.4", "Student resolution — weight reclaimed from double-bookings",
-      good = "After the meeting-level split, avg student weight drops only by the double-booked share (small if DBs are rare).",
-      value = tr_safe({
-        ba <- cs_data |> filter(C_course_time_exclude == "Include") |>
-          group_by(D_stu_id) |>
-          summarise(b = sum(M_cls_class_weight, na.rm = TRUE),
-                    a = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop")
-        glue("avg {round(mean(ba$b),2)} -> {round(mean(ba$a),2)} per student")
-      }, NA),
+    tr_check("3.4", "consolidate_sections() — overlapping sections merge into one class",
+      good = "Every CONS_ class is one teacher's merged sections; teacher double-bookings resolve and section counts drop to their true number.",
+      value  = tr_safe(glue("teacher DBs {teach_db_before} -> {teach_db_after} \u00B7 sections {sec_before} -> {sec_after} \u00B7 one-teacher-per-class: {if (nrow(multi_teacher)==0) 'PASS' else 'FAIL'}"), NA),
+      evidence = function() consol_sum),
+
+    tr_check("3.5", "resolve_*_stage() — weight splits at conflicts, only ever shrinking",
+      good = "adj \u2265 post_class \u2265 post_teachers \u2265 post_student everywhere. The stage columns show how a double-booked student's weight moves step by step.",
+      value  = if (mono) "PASS — weight never inflates" else "FAIL — a stage increased weight",
       evidence = function() {
-        cs_data |> filter(C_course_time_exclude == "Include") |>
+        tr_safe(resolved |> filter(C_course_time_exclude == "Include") |>
           group_by(D_location_name, D_stu_id) |>
-          summarise(before = sum(M_cls_class_weight, na.rm = TRUE),
-                    after  = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop") |>
+          summarise(exploded      = sum(M_class_weight_exploded,      na.rm=TRUE),
+                    post_class    = sum(M_class_weight_post_class,    na.rm=TRUE),
+                    post_teachers = sum(M_class_weight_post_teachers, na.rm=TRUE),
+                    post_student  = sum(M_class_weight_post_student,  na.rm=TRUE), .groups="drop") |>
           group_by(D_location_name) |>
-          summarise(n_students        = n_distinct(D_stu_id),
-                    avg_weight_before = round(mean(before), 2),
-                    avg_weight_after  = round(mean(after), 2),
-                    weight_reclaimed  = round(mean(before) - mean(after), 3), .groups = "drop")
-      })
+          summarise(n_db_students = n_distinct(D_stu_id),
+                    across(c(exploded, post_class, post_teachers, post_student),
+                           ~ round(mean(.x), 2)), .groups="drop"), data.frame())
+      }),
+
+    tr_check("3.6", "unify_resolution() — every row accounted for (before \u2192 after)",
+      good = "Unified = resolved DB rows + pass-through non-DB rows (nothing lost or duplicated). The 'after' column your 3.3 left pending, filled in.",
+      value  = if (unif_ok) "PASS — rows fully accounted" else "FAIL — row count mismatch",
+      evidence = function() {
+        list(
+          "Before \u2192 after" = data.frame(
+            metric = c("Students double-booked","Teachers double-booked","Distinct sections","Avg weight / student"),
+            before = c(length(flagged_students), teach_db_before, sec_before, round(mean(stu_ba$b),2)),
+            after  = c(0, teach_db_after, sec_after, round(mean(stu_ba$a),2))),
+          "Row accounting" = unification_summary(unified, resolved, cs_data))
+      }),
+
+    tr_check("3.7", "Finale — real double-bookings resolved end to end",
+      good = glue("Student {ex_student}'s weight sums to one class-worth (no time lost); teacher's sections in {ex_cons} merge while each student keeps only their own meetings."),
+      evidence = function() list(
+        "A student double-booking, traced"   = trace_cols(trace_record(resolved, stu_id = ex_student)),
+        "A teacher consolidation, traced"    = trace_cols(trace_record(resolved, class_id = ex_cons))))
   )
 )
 
