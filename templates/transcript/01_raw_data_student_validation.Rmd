@@ -14,6 +14,8 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+# Start fresh
+rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -27,10 +29,14 @@ options(scipen = 99) #prevent any numbers from showing up as scientific notation
 ```
 
 ```{r}
-#set sharepoint site URL for access to our org-wide files
+# Connect to SharePoint where the data files live
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
-#access sharepoint site URL you may be prompted to sign in here
-orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)
+internal_drive    <- orgfiles_site$get_drive("Internal")
+
+# Read the district config — tells us where to find files, how to rename columns, etc.
+config <- yaml::read_yaml(here::here("config", "districts", "tr_nashville.yaml"))
+raw_data_folder_path <- config$raw_data_folder_path
 ```
 
 # Part 1: Set your folder path(s) and read in your data
@@ -41,16 +47,13 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 
 -   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
 
-```{r, warning = F, message = F}
+```{r, warning=F, message=F}
 
-help(ers_read_sharepoint)
-
-raw_data_folder_path <- "School System Partners/Nashville Public Schools/2025 HS Pathways/MNPS Data"
-
-#bring in file
-student_dem_raw <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "Demographics_2122to2425.csv",
-  drive_name = "external_drive")
+# Load the raw student demographics data
+student_dem_raw <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = config$raw_files$stu_demographics
+)
 
 # Clean column names to remove spaces and special characters
 student_dem_raw <- student_dem_raw %>% clean_names()
@@ -71,30 +74,9 @@ student_dem_raw <- student_dem_raw %>% clean_names()
 -   **Project Team Action:** Definitely change (see guidance in code block)
 
 ```{r}
-#if the ERS Standard column is present in your data then type your district's column on the right hand side (it is okay if the names are identical)
-#If the ERS Standard column is not present in your data, create it and assign NA to indicate missing values, like D_stu_gender = NA,. Make a note of this missing field for your Data Validation Checks table
-#you can also exclude the columns you do not need for your analysis by simply not renaming those columns in this step (the mutate function with the .keep = none argument only retains columns that follow the ERS column tagging convention)
-
-student_dem_raw <- student_dem_raw %>%
-  mutate(
-#critical    
-         D_stu_id = as.character(`cid`),
-         D_location_name = as.character(`school_name`),
-         
-# Ensure the 'format' matches how dates appear in your raw CSV file. Common formats: "%Y-%m-%d", "%m/%d/%Y"
-         D_stu_enter_date = as.Date(`edt`, format = "%m/%d/%Y"),
-         D_stu_exit_date = as.Date(`wdt`, format = "%m/%d/%Y"),
-         D_year = as.character(`year`),
-         D_location_id = as.character(`meno`),
-         D_stu_grade_level = as.numeric(`grade`),
-         D_stu_race = as.character(`race`),
-         D_stu_swd = as.character(`sped`),
-         D_stu_ell = as.character(`ell`),
-         D_stu_frl = as.character(`ed`),
-         .keep = "none") #"Keep-None" here will ONLY keep the columns listed above, so if you do not list a column, it will be deleted. Make sure to keep any district specific columns or other columns you need for your analysis.
-
-#district-specific- add your own!
-#XXX = XXX
+# Rename demographic columns to standard names, then keep only what we need
+student_dem_raw <- student_dem_raw |>
+  rename(any_of(unlist(config$column_map$demographics)))
 
 ```
 
@@ -128,7 +110,7 @@ student_dem_raw <- student_dem_raw %>%
 #student demographics
 student_dem_raw %>% nrow() #View output of check to know what to write for your status column
 
-#Force exit dates for students who don't have one- in each case of a student having no exit date, we will assume they are still enrolled for that year, and set their exit date as June 30th of the value in D_year for that row. The format of the date should be year, month, day (so value from D_year %yyyy, %mm, %dd)
+# Force exit dates for students who don't have one- in each case of a student having no exit date, we will assume they are still enrolled for that year, and set their exit date as June 30th of the value in D_year for that row. The format of the date should be year, month, day (so value from D_year %yyyy, %mm, %dd)
 student_dem_raw <- student_dem_raw %>%
   mutate(
     D_stu_exit_date = ifelse(is.na(D_stu_exit_date), 
@@ -140,7 +122,8 @@ student_dem_raw <- student_dem_raw %>%
 #hmm its still not making it a date. Can we force convert that column to be a date?
 student_dem_raw <- student_dem_raw %>%
   mutate(
-    D_stu_exit_date = as.Date(D_stu_exit_date, format = "%Y-%m-%d")
+    D_stu_exit_date  = as.Date(D_stu_exit_date, format = "%Y-%m-%d"),
+    D_stu_enter_date = as.Date(D_stu_enter_date, format = "%m/%d/%Y")
   )
 
 #there we go!
@@ -187,7 +170,6 @@ print(head(student_dem_raw))
 ### 2.2.1 Student with multiple schools across years
 ```{r}
 
-
 #Create a clean location name colum that removes any numbers from the start of the location name so that we have just the high schools name
 student_dem_raw <- student_dem_raw %>%
   mutate(D_location_name_clean = gsub("[0-9-]", "", D_location_name)) %>%
@@ -217,7 +199,7 @@ students_multiple_schools_clean_more_than_50_days <- student_multiple_schools_cl
   filter(M_days_enrolled > 50) %>%
   print()
 
-#how distrinct students is that?
+#how distinct students is that?
 distinct_students_multiple_schools_clean_more_than_50_days <- students_multiple_schools_clean_more_than_50_days %>%
   summarise(n_distinct(D_stu_id)) %>% 
   print()
@@ -511,9 +493,6 @@ student_dem_raw <- student_dem_raw %>%
     D_stu_ell = ifelse(D_stu_ell == "1", "Yes", "No"),
     D_stu_swd = ifelse(D_stu_swd == "1", "Yes", "No")
   )
-
-
-
 ```
 
 #### b. % FRL
@@ -621,10 +600,6 @@ grade_level_distribution <- student_dem_raw %>%
   summarise(count_students = n_distinct(D_stu_id)) %>%
   arrange(D_year, D_stu_grade_level) %>%
   print()
-
-
-
-
 
 ```
 
@@ -747,8 +722,6 @@ student_check_6 <- student_dem_raw %>%
   filter(D_stu_id == 190000206) %>% 
   print()
 
-
-
 ```
 
 # Part 4: Upload File to Sharepoint
@@ -757,13 +730,12 @@ student_check_6 <- student_dem_raw %>%
 
 -   **Check:** None/Update names of data-frames as needed for team.
 
--   **Project Action:** `processed_data_folder_path` and `file_name_with_extension` will need to be updated.
+-   **Project Action:** `file_name_with_extension` will need to be updated.
 
 ```{r}
-processed_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
-
+# Export to 2. Processed Data --> 2. Transcript folder on SharePoint
 ers_write_sharepoint(data = stu_roll_up,
-                     folder_path = processed_data_folder_path,
-                     file_name_with_extension = "MNPS_Stu_Rollup.csv",
-                    drive_name = "client_work_drive")
+                     folder_path = raw_data_folder_path,
+                     file_name_with_extension = "/2. Processed Data/01_tr_stu_rollup.csv",
+                     drive_name = "client_work_drive")
 ```

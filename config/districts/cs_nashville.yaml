@@ -1,7 +1,7 @@
 # =============================================================================
 # 00_district_config.yml
 #
-# This is THE configuration file for the entire pipeline.
+# This is THE configuration file for the entire COURSE SCHEDULE pipeline.
 # New district = copy this file and edit the values below; the code doesn't change.
 #
 # HOW TO USE THIS FILE:
@@ -51,21 +51,22 @@ year: "2024-25"
 
 # The SharePoint folder path where all data for this district lives.
 # Everything below is relative to this path.
-raw_data_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville"
+raw_data_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/1. Course Schedule"
 # File paths within that folder for each raw data source.
 raw_files:
-  cs_raw:              "/0. Raw Data/1. Course Schedule/Courses_Oct2024_FERPA.xlsx"
-  stu_demographics:    "/0. Raw Data/1. Course Schedule/Demographics_Oct2024_FERPA.xlsx"
-  hr_raw:              "/0. Raw Data/1. Course Schedule/HR_Aug2024_INDEMP.xlsx"
+  cs_raw:              "/0. Raw Data/Courses_Oct2024_FERPA.xlsx"
+  stu_demographics:    "/0. Raw Data/Demographics_Oct2024_FERPA.xlsx"
+  hr_raw:              "/0. Raw Data/HR_Aug2024_INDEMP.xlsx"
 
   # COURSE CODING FILE:
   # This file doesn't exist when you first start — you CREATE it during Stage 01
   # by exporting a blank template, then filling it in (manually or with AI help).
   # Once it's ready, put it in the /1. Coding folder and update this path.
   # Stage 02 will NOT work correctly until this file exists and is coded.
-  course_coding:       "/1. Coding/mnps_course_coding_24-25.xlsx"
-  location_coding:     "/1. Coding/mnps_high_schools.xlsx"
-
+source_of_truth_folder_path:  "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/3. Source of Truth"
+source_of_truth_files:
+  course_coding:              "/mnps_course_coding_24-25.xlsx"
+  location_coding:            "/mnps_high_schools.xlsx"
 
 # ===========================================================================
 # SECTION 2: INTAKE — How was this data collected?

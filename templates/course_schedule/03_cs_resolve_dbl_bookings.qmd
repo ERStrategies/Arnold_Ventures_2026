@@ -63,14 +63,14 @@ source(here::here("templates", "course_schedule", "helpers", "03_cs_unification_
 
 ```{r setup-config-and-data}
 # Read the district config (drives everything: weights, bell schedule, etc.)
-config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
+raw_data_folder_path <- config$raw_data_folder_path
+source_of_truth_folder_path <- config$source_of_truth_folder_path
 
 # "spec" tells us how schedule expressions are structured (days, periods, rotations)
 # "term_expands" tells us how terms map to time-slots for conflict detection
 spec         <- expr_spec(config)
 term_expands <- term_expands_spec(config)
-
-raw_data_folder_path <- config$raw_data_folder_path
 ```
 
 ```{r subtitle}

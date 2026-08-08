@@ -14,6 +14,8 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+# Start fresh
+rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -27,10 +29,14 @@ options(scipen = 99) #prevent any numbers from showing up as scientific notation
 ```
 
 ```{r}
-#set sharepoint site URL for access to our org-wide files
+# Connect to SharePoint where the data files live
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
-#access sharepoint site URL you may be prompted to sign in here
-orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)
+internal_drive    <- orgfiles_site$get_drive("Internal")
+
+# Read the district config — tells us where to find files, how to rename columns, etc.
+config <- yaml::read_yaml(here::here("config", "districts", "tr_nashville.yaml"))
+raw_data_folder_path <- config$raw_data_folder_path
 ```
 
 # Part 1: Set your folder path(s) and read in your data
@@ -41,24 +47,23 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 
 -   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
 
-```{r, warning = F, message = F}
+```{r, warning=F, message=F}
 
-raw_data_folder_path <- "School System Partners/Nashville Public Schools/2025 HS Pathways/MNPS Data"
-
-#bring in file
-transcript_raw <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "Transcripts_2122to2425.csv",
-  drive_name = "external_drive")
+# Load the raw transcript data
+transcript_raw <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = config$raw_files$transcript_raw
+)
 
 # Clean column names to remove spaces and special characters
 transcript_raw <- transcript_raw %>% clean_names()
 
-#Added after the fact for SE to do some validation on past teams course coding!
-internal_file_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
+# #Added after the fact for SE to do some validation on past teams course coding!
+# internal_file_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
 
-past_course_catalog <- ers_read_sharepoint(folder_path = internal_file_path,
-  file_name_with_extension = "03_course_coding_24-25 - CODED 10.24.xlsx",
-                    drive_name = "client_work_drive")
+# past_course_catalog <- ers_read_sharepoint(folder_path = internal_file_path,
+#   file_name_with_extension = "03_course_coding_24-25 - CODED 10.24.xlsx",
+#                     drive_name = "client_work_drive")
 ```
 
 
@@ -78,7 +83,6 @@ past_course_catalog <- ers_read_sharepoint(folder_path = internal_file_path,
 #if the ERS Standard column is present in your data then type your district's column on the right hand side (it is okay if the names are identical)
 #if the ERS Standard column is not present in your data then type NA
 #you can also exclude the columns you do not need for your analysis by simply not renaming those columns in this step (the mutate function with the .keep = none argument only retains columns that follow the ERS column tagging convention)
-
 
 transcript_all_yrs <- transcript_raw %>%
   mutate(
@@ -112,7 +116,6 @@ transcript_all_yrs <- transcript_all_yrs %>%
       TRUE ~ NA_character_  # Default case if no match is found
     )
   )
-
 ```
 
 #### b. Review columns
@@ -1045,7 +1048,7 @@ ers_write_sharepoint(data = stu_roll_up,
 
 **ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
 
-```{r eval = FALSE}
+```{r eval=FALSE}
 # You can change the destination path of your knitted file here if you wish
 destination_of_knitted_file <- processed_data_folder_path
 

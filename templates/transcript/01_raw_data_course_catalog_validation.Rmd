@@ -27,10 +27,15 @@ options(scipen = 99) #prevent any numbers from showing up as scientific notation
 ```
 
 ```{r}
-#set sharepoint site URL for access to our org-wide files
+# Connect to SharePoint where the data files live
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
-#access sharepoint site URL you may be prompted to sign in here
-orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)
+internal_drive    <- orgfiles_site$get_drive("Internal")
+
+# Read the district config — tells us where to find files, how to rename columns, etc.
+config <- yaml::read_yaml(here::here("config", "districts", "tr_nashville.yaml"))
+raw_data_folder_path <- config$raw_data_folder_path
+
 ```
 
 # Part 1. Set Variables & Read Data
@@ -38,21 +43,16 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 ## 1.1 Update Folder Path, File Names, Year and Bring in Data
 
 ```{r}
-
-#update the folder path
-raw_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
-
-#replace file name with your files name as well as the years
-#add additional years and files as needed
-#year 1
-course_catalog_raw <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "AON Pathway State Courses Coded 10.20.23 .xlsx",
-    drive_name = "client_work_drive")
+# Load the raw course catalog
+course_catalog_raw <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = config$raw_files$course_catalog_raw
+)
 
 # Clean column names to remove spaces and special characters
-course_catalog_raw <- course_catalog_raw %>% clean_names()
+# course_catalog_raw <- course_catalog_raw %>% clean_names()
 
-#rename to the template name
+# Rename to the template name
 course_catalog_all_years <- course_catalog_raw
 
 ```
@@ -94,7 +94,7 @@ ers_column_info(course_catalog_all_years)
 -   **Project Team Action:** Gut check/track. You might write something like "all five files have roughly XX rows each, which matches our expectation since there's YY high school students in the district"
 
 ```{r}
-course_catalog_all_years %>% nrow() #View output of check to know what to write for your status column
+course_catalog_all_years %>% nrow() # View output of check to know what to write for your status column
 ```
 
 #### b. Resolution Remove Rows
@@ -166,7 +166,7 @@ course_catalog_all_years <- course_catalog_all_years %>%
 -   **Project Action:** Gut check/track
 
 ```{r}
-#view duplicates in course catalog file
+# View duplicates in course catalog file
  course_catalog_all_years_dups <- course_catalog_all_years %>%
   group_by_all() %>%
  mutate(n = n()) %>%
@@ -174,7 +174,7 @@ course_catalog_all_years <- course_catalog_all_years %>%
 view(course_catalog_all_years_dups) %>% 
   ungroup()
 
-#count the number of total duplicates
+# Count the number of total duplicates
   course_catalog_all_years_dups %>%
   summarise(distinct_course_ids = n_distinct(D_course_id))
 
@@ -219,7 +219,7 @@ course_catalog_all_years <- course_catalog_all_years %>%
 -   **Project Team Action:** Review output and note any key columns with a large % of missing values. Are they critical? Do you need to ask district about missing data? Discuss any issues with project team. (2) Do the unique count of rows align with what you would expect to see? Investigate further as needed after checking for duplicates. Gut check/track
 
 ```{r}
-#Create new data frame with column information
+# Create new data frame with column information
 col_info <-  data.frame(
   Column_Name = names(course_catalog_all_years),
   
@@ -230,7 +230,7 @@ col_info <-  data.frame(
   row.names= NULL
 )
 
-#calc % missing
+# Calc % missing
 col_info <- col_info %>% 
   mutate(Percent_Missing = round(NA_Rows / Count_Rows * 100,2),
          Percent_Missing = Percent_Missing, nsmall = 2) %>% 
@@ -257,7 +257,7 @@ col_info <- col_info %>%
   filter(count > 1) %>%
  arrange(D_course_id)# Keep only rows where there are multiple names
 
-#how many instances of courses having the exact same name?
+# how many instances of courses having the exact same name?
 course_catalog_all_years %>%
   group_by(D_course_name) %>%
   summarise(count = n_distinct(D_course_id)) %>%
@@ -265,7 +265,7 @@ course_catalog_all_years %>%
   ungroup() %>%
   arrange(desc(count)) # Keep only rows where there are multiple course IDs
 
-#how many instances of course code being exactly the same
+# how many instances of course code being exactly the same
 course_catalog_all_years %>%
   group_by(D_course_id) %>%
   summarise(count = n_distinct(D_course_name)) %>%
@@ -400,7 +400,7 @@ print(percent_dual_credit)
 -   **Project Action:** gut check/track
 
 ```{r}
-#Filter to dual credit courses, Review the resulting data frame
+# Filter to dual credit courses, Review the resulting data frame
 courses_with_dual_credit_flag <- course_catalog_all_years %>% filter(D_dual_credit_flag == "Y") %>% 
   print()
 ```
@@ -517,7 +517,7 @@ processed_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathwa
 ers_write_sharepoint(data = course_catalog_all_years,
                      folder_path = processed_data_folder_path,
                      file_name_with_extension = "MNPS_Course_Catalog_Validated.csv",
-                    drive_name = "client_work_drive")
+                     drive_name = "client_work_drive")
 ```
 
 ## Part 4: Knit the file into a nicely formatted HTML that you can share with teammates!
@@ -528,7 +528,7 @@ ers_write_sharepoint(data = course_catalog_all_years,
 
 **ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
 
-```{r eval = FALSE}
+```{r eval=FALSE}
 # You can change the destination path of your knitted file here if you wish
 destination_of_knitted_file <- processed_data_folder_path
 

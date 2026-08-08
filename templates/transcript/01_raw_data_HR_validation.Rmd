@@ -27,10 +27,14 @@ options(scipen = 99) #prevent any numbers from showing up as scientific notation
 ```
 
 ```{r}
-#set sharepoint site URL for access to our org-wide files
+# Connect to SharePoint where the data files live
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
-#access sharepoint site URL you may be prompted to sign in here
-orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)
+internal_drive    <- orgfiles_site$get_drive("Internal")
+
+# Read the district config — tells us where to find files, how to rename columns, etc.
+config <- yaml::read_yaml(here::here("config", "districts", "tr_nashville.yaml"))
+raw_data_folder_path <- config$raw_data_folder_path
 ```
 
 # Part 1: Set your folder path(s) and read in your data
@@ -41,14 +45,13 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 
 -   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
 
-```{r, warning = F, message = F}
+```{r, warning=F, message=F}
 
-raw_data_folder_path <- "Core Services/Strategy & Innovation/Data Strategy & Innovation/3. R Stuff/Transcript Templatization (2024)/Dummy Data"
-
-#bring in file
-hr_raw_data <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "HPS_HR_Data.csv",
-                   drive_name = "internal_drive")
+# Load the raw course catalog
+hr_raw_data <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = config$raw_files$hr_raw
+)
 
 # Clean column names to remove spaces and special characters
 hr_raw_data  <- hr_raw_data %>% clean_names()
@@ -540,7 +543,7 @@ ers_write_sharepoint(data = hr_raw_data,
 
 **ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
 
-```{r eval = FALSE}
+```{r eval=FALSE}
 # You can change the destination path of your knitted file here if you wish
 destination_of_knitted_file <- processed_data_folder_path
 

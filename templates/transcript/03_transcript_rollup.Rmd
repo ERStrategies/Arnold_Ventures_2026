@@ -14,6 +14,8 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+# Start fresh
+rm(list = ls())
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -42,7 +44,7 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 
 -   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
 
-```{r, warning = F, message = F}
+```{r, warning=F, message=F}
 
 raw_data_folder_path <- "**Set Folder Path**"
 
@@ -76,7 +78,7 @@ View(course_catalog_validated)
 
 **ACTION: Run the code below to see documentation on our custom function!**
 
-```{r, eval = interactive()}
+```{r, eval=interactive()}
 ?ers_column_info
 ```
 
@@ -276,7 +278,7 @@ ers_write_sharepoint(data = transcript_roll_up,
 
 **ACTION: If you have made changes to your file since last knitting, make sure to knit first before running the code below. It will upload your knitted file to your "processed_data_folder_path" but you can change the destination_of_knitted_file below.**
 
-```{r eval = FALSE}
+```{r eval=FALSE}
 # You can change the destination path of your knitted file here if you wish
 destination_of_knitted_file <- processed_data_folder_path
 

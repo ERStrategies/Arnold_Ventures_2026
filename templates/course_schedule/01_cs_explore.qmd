@@ -61,6 +61,7 @@ source(here::here("templates", "course_schedule", "helpers", "01_cs_review_helpe
 # Read the district config — tells us where to find files, how to rename columns, etc.
 config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
+source_of_truth_folder_path <- config$source_of_truth_folder_path
 ```
 
 ```{r subtitle}
@@ -92,9 +93,10 @@ stu_demographics <- tr_safe(ers_read_sharepoint(
   otherwise = NULL
 )
 
+# Load location coding data from the Sourth of Truth folder path
 location_coding <- tr_safe(ers_read_sharepoint(
-    folder_path = raw_data_folder_path,
-    file_name_with_extension = config$raw_files$location_coding
+    folder_path = source_of_truth_folder_path,
+    file_name_with_extension = config$source_of_truth_files$location_coding
   ),
   otherwise = NULL
 )
@@ -166,7 +168,7 @@ this chunk's `eval` to `true`.
 #| eval: true
 
 # Re-read config in case you've updated it between renders
-config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
 
 # ---- Step 1: RENAME columns ----
 # The config's "column_map" tells us which district column name maps to which
