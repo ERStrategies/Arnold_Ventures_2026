@@ -63,20 +63,11 @@ raw_files:
 # Stage 02 will NOT work correctly until this file exists and is coded.
 source_of_truth_folder_path:  "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/3. Source of Truth"
 source_of_truth_files:
-  course_catalog_raw:         "/mnps_course_coding_24-25.xlsx"
+  course_catalog:             "/mnps_course_coding_24-25.xlsx"
   location_coding:            "/mnps_high_schools.xlsx"
 
 # ===========================================================================
-# SECTION 2: INTAKE — How was this data collected?
-# WHEN TO FILL IN: During Stage 01, once you understand the data structure.
-# ===========================================================================
-intake:
-  # Is this a single snapshot of schedules, or does it track enrollment over time?
-  enrollment_type: snapshot
-  snapshot_date: null
-
-# ===========================================================================
-# SECTION 3: COLUMN MAP — What are the district's column names?
+# COLUMN MAP — What are the district's column names?
 # WHEN TO FILL IN: After running Stage 01's raw profile, where you can see
 #   every column name in the data. Map each one to its standard D_ name.
 #   Stage 01 will NOT rename columns correctly until this is filled in.
@@ -89,13 +80,14 @@ intake:
 column_map:
   transcript:
     D_stu_id:            cid
-    D_location_id:       meno
-    D_course_id:         cou
-    D_employee_id:       emp
-    D_course_name:       ttl
-    D_course_section_id: sec
-    D_period:            per
-    D_term:              term
+    D_course_id:         course_number
+    D_course_name:       course_name
+    D_stu_grade_level:   gradelevel
+    D_stu_grade:         percent
+    D_creds_earn:        credits_earned
+    D_creds_possible:    credits_attempted
+    D_start_year:        start_year
+    D_end_year:          end_year
 
   demographics:
     D_stu_id:            cid

@@ -46,7 +46,7 @@ raw_data_folder_path <- config$raw_data_folder_path
 # Load the raw course catalog
 course_catalog_raw <- ers_read_sharepoint(
   folder_path = raw_data_folder_path,
-  file_name_with_extension = config$raw_files$course_catalog_raw
+  file_name_with_extension = config$raw_files$course_catalog
 )
 
 # Clean column names to remove spaces and special characters

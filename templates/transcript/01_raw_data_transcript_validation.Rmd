@@ -37,6 +37,7 @@ internal_drive    <- orgfiles_site$get_drive("Internal")
 # Read the district config — tells us where to find files, how to rename columns, etc.
 config <- yaml::read_yaml(here::here("config", "districts", "tr_nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
+source_of_truth_folder_path <- config$source_of_truth_folder_path
 ```
 
 # Part 1: Set your folder path(s) and read in your data
@@ -59,11 +60,10 @@ transcript_raw <- ers_read_sharepoint(
 transcript_raw <- transcript_raw %>% clean_names()
 
 # #Added after the fact for SE to do some validation on past teams course coding!
-# internal_file_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
-
-# past_course_catalog <- ers_read_sharepoint(folder_path = internal_file_path,
-#   file_name_with_extension = "03_course_coding_24-25 - CODED 10.24.xlsx",
-#                     drive_name = "client_work_drive")
+course_catalog <- ers_read_sharepoint(
+  folder_path = source_of_truth_folder_path,
+  file_name_with_extension = config$source_of_truth_files$course_catalog
+)
 ```
 
 
@@ -80,24 +80,9 @@ transcript_raw <- transcript_raw %>% clean_names()
 -   **Project Team Action:** Definitely change (see guidance in code block)
 
 ```{r}
-#if the ERS Standard column is present in your data then type your district's column on the right hand side (it is okay if the names are identical)
-#if the ERS Standard column is not present in your data then type NA
-#you can also exclude the columns you do not need for your analysis by simply not renaming those columns in this step (the mutate function with the .keep = none argument only retains columns that follow the ERS column tagging convention)
-
-transcript_all_yrs <- transcript_raw %>%
-  mutate(
-    # critical
-    D_stu_id = cid,
-    D_stu_grade_level = gradelevel,
-    D_course_id = course_number, 
-    D_course_name = course_name, 
-    D_stu_grade = `percent`,
-    D_creds_earn = credits_earned,
-    D_creds_possible = credits_attempted,
-    D_start_year = start_year,
-    D_end_year = end_year,
-    .keep = "none"  # This drops any column not explicitly created above
-  )
+# Rename transcript columns to standard names from tr_[district].yaml
+transcript_all_yrs <- transcript_raw |>
+  rename(any_of(unlist(config$column_map$transcript)))
 
 #and lets see what we can do about the term columns.First, lets see if the course_name column contains "S1", "S2", And for quarters
 transcript_all_yrs %>%
@@ -151,7 +136,7 @@ transcript_all_yrs <- transcript_all_yrs %>%
 transcript_all_yrs %>%
   group_by(D_creds_earn, D_term) %>%
   summarize(n = n_distinct((D_course_name))) %>% 
-  pivot_wider(D_creds_earn,names_from = D_term,values_from = n) %>%
+  pivot_wider(D_creds_earn, names_from = D_term, values_from = n) %>%
   ungroup()
 
 ```
@@ -195,12 +180,11 @@ transcript_all_yrs %>%
   print()
 
 #Are any course IDs in Catalog NA?
-past_course_catalog %>%
+course_catalog %>%
   filter(is.na(C_course_id_clean)) %>% 
-  select(C_course_name_clean, C_course_id_clean) %>% 
+  select(C_course_name, C_course_id_clean) %>% 
   distinct() %>% 
   print()
-
 
 #Are any course IDs in the transcript NA?
 transcript_all_yrs %>%
@@ -340,14 +324,12 @@ col_info_zero <-  data.frame(
 col_info_zero <- col_info_zero %>%
   mutate(Percent_Zero = Count_Zero / Total_Rows * 100)
 
-
 #calc % missing
 col_info <- col_info %>%
             mutate(Percent_Missing = NA_Rows / Count_Rows * 100)
 
 #print new data frame
 print(col_info)
-
 
 # In the chunk for 2.6b, after col_info is created and printed:
 ggplot(col_info, aes(x = reorder(Column_Name, Percent_Missing), y = Percent_Missing)) +
@@ -373,8 +355,6 @@ transcript_all_yrs %>%
   filter(!is.na(D_stu_grade_level)) %>%
   distinct(D_stu_grade_level) %>%
   arrange(D_stu_grade_level)
-
-
 
 ```
 
@@ -637,8 +617,6 @@ ggplot(bucket_counts, aes(x = Credit_Bucket, y = n_students)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-
-
 ```
 
 
@@ -652,7 +630,6 @@ ggplot(bucket_counts, aes(x = Credit_Bucket, y = n_students)) +
 -   **Project Action:** None
 
 ```{r}
-
 #calculate the number of students enrolled in each course and section
 transcript_all_yrs %>%
   group_by(D_course_name, D_term, D_end_year) %>%
@@ -660,7 +637,6 @@ transcript_all_yrs %>%
     students_enrolled = n_distinct(D_stu_id)
   ) %>%
   ungroup() 
-
 
 ## Count the number of rows where course_section is equal to zero. 
 transcript_all_yrs %>% 
@@ -698,7 +674,6 @@ enrollment_count_by_location_id %>%
   summarise(unique_course_ids = n_distinct(D_course_name)) %>% 
   print()
 
-
 ```
 
 ### 2.12 MNPS - Testing Course Catalog
@@ -708,7 +683,7 @@ transcript_all_yrs <- transcript_all_yrs %>%
   mutate(course_id_cleaned = str_replace(D_course_id, "([[:punct:]]?\\s*)?(S1|S2)\\s*$", ""))
 
 # Step 2. Get distinct IDs from both sources
-course_catalog_ids <- unique(past_course_catalog$C_course_id_clean)
+course_catalog_ids <- unique(course_catalog$C_course_id_clean)
 transcript_ids <- unique(transcript_all_yrs$course_id_cleaned)
 
 # Step 3. Compare
@@ -729,7 +704,6 @@ transcript_courses_not_in_catalog <- transcript_all_yrs %>%
   select(course_id_cleaned, D_course_name) %>%
   distinct()
 
-
 #Create a data-frame of the unique course IDs that are only in the transcript data, not in the course catalog
 transcript_courses_not_in_catalog <- transcript_all_yrs %>%
   filter(course_id_cleaned %in% ids_only_transcript) %>%
@@ -737,10 +711,6 @@ transcript_courses_not_in_catalog <- transcript_all_yrs %>%
   distinct() %>%
   arrange(course_id_cleaned) %>%
   print()
-
-
-
-
 
 ```
 
@@ -759,9 +729,8 @@ transcript_all_yrs %>%
   distinct() %>%
   print()
 
-
 # Step 2. Get distinct names from both sources
-catalog_names <- unique(past_course_catalog$C_course_name_clean)
+catalog_names <- unique(course_catalog$C_course_name)
 transcript_names <- unique(transcript_all_yrs$course_name_cleaned)
 
 # Step 3. Compare
@@ -780,10 +749,10 @@ cat("Names only in transcript:", length(names_only_transcript), "\n")
 transcript_course_names_not_in_catalog <- transcript_all_yrs %>%
   filter(course_name_cleaned %in% names_only_transcript) %>%
   select(course_name_cleaned, D_course_id) %>%
-  distinct() %>% 
+  distinct()
 
   
-  #Trying strict cleaning then comparing
+# Trying strict cleaning then comparing
 clean_strings <- function(x) {
   x %>%
     str_replace_all("[[:space:]]+", " ") %>%   # collapse ALL whitespace (even tabs, non-breaking)
@@ -792,12 +761,11 @@ clean_strings <- function(x) {
     stringi::stri_trans_general("latin-ascii") # remove accents/diacritics
 }
 
-catalog_names    <- clean_strings(unique(past_course_catalog$C_course_name_clean))
+catalog_names    <- clean_strings(unique(course_catalog$C_course_name))
 transcript_names <- clean_strings(unique(transcript_all_yrs$course_name_cleaned))
 
 names_only_transcript <- setdiff(transcript_names, catalog_names)
 length(names_only_transcript)
-
 
 # Compare again
 names_in_both        <- intersect(transcript_names, catalog_names)
@@ -809,11 +777,6 @@ cat("Transcript:", length(transcript_names), "\n")
 cat("Both:", length(names_in_both), "\n")
 cat("Only catalog:", length(names_only_catalog), "\n")
 cat("Only transcript:", length(names_only_transcript), "\n")
-
-
-
-
-
 
 ```
 
@@ -842,7 +805,7 @@ students_multiple_grades %>%
   ungroup() %>%
   print()
 
-#hmmm, so 731/2,468 which is only 30%, would expect it to be a bit higher. Lets try another way to look at this.
+#hmmm, so 731/2, 468 which is only 30%, would expect it to be a bit higher. Lets try another way to look at this.
 
 #In transcript all years lets create a new column that groups by student ID and sums total credits
 transcript_all_yrs <- transcript_all_yrs %>%
@@ -959,7 +922,7 @@ transcript_all_yrs %>%
 
 
 
-#and because Rebel wanted to check, how many students have multiple grades in the same year in semester 2 specifically?
+# And because Rebel wanted to check, how many students have multiple grades in the same year in semester 2 specifically?
 students_multiple_grades_semester_2 <- transcript_all_yrs %>%
   filter(D_term == "Semester 2") %>%
   group_by(D_stu_id, D_end_year) %>%
@@ -1017,10 +980,19 @@ students_MZ59525AL <- transcript_all_yrs %>%
   arrange(D_stu_id, D_end_year) %>% 
   print()
 
+```
 
-
-
-
+### 2.16 MNPS export course catalog for coding
+```{r}
+# Create df of unique D_course_id and D_course_name pairs
+unique_course_catalog <- transcript_all_yrs %>%
+  filter(!is.na(D_course_name) & !is.na(D_stu_grade)) %>%
+  select(D_course_id, course_name_cleaned) %>%
+  distinct() %>%
+  group_by(D_course_id) %>%
+  mutate(course_name_count = n()) %>%
+  ungroup() |> 
+  arrange(desc(course_name_count), D_course_id)
 ```
 
 # Part 3: Upload File to Sharepoint
@@ -1032,12 +1004,17 @@ students_MZ59525AL <- transcript_all_yrs %>%
 -   **Project Action:** None
 
 ```{r}
-processed_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
+# Export validated transcript_all_yrs to SharePoint
+ers_write_sharepoint(data = transcript_all_yrs,
+                     folder_path = raw_data_folder_path,
+                     file_name_with_extension = "/2. Processed Data/01_tr_transcript_validated.csv",
+                     drive_name = "client_work_drive")
 
-ers_write_sharepoint(data = stu_roll_up,
-                     folder_path = processed_data_folder_path,
-                     file_name_with_extension = "MNPS_Transcript_Validated.csv",
-                    drive_name = "client_work_drive")
+# Export unique course catalog to SharePoint
+# ers_write_sharepoint(data = unique_course_catalog,
+#                      folder_path = raw_data_folder_path,
+#                      file_name_with_extension = "/1. Coding/course_catalog_2122_2425.csv",
+#                      drive_name = "client_work_drive")
 ```
 
 ## Part 4: Knit the file into a nicely formatted HTML that you can share with teammates!

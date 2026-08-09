@@ -29,10 +29,15 @@ options(scipen = 99) #prevent any numbers from showing up as scientific notation
 ```
 
 ```{r}
-#set sharepoint site URL for access to our org-wide files
+# Connect to SharePoint where the data files live
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
-#access sharepoint site URL you may be prompted to sign in here
-orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
+orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)
+internal_drive    <- orgfiles_site$get_drive("Internal")
+
+# Read the district config — tells us where to find files, how to rename columns, etc.
+config <- yaml::read_yaml(here::here("config", "districts", "tr_nashville.yaml"))
+raw_data_folder_path <- config$raw_data_folder_path
+source_of_truth_folder_path <- config$source_of_truth_folder_path
 ```
 
 # Part 1: Set your folder path(s) and read in your data
@@ -44,24 +49,23 @@ orgfiles_site <- get_sharepoint_site(site_url = orgfiles_site_url)
 -   **Project Team Action:** Replace folder path with the folder path where your files is replace **file_name_with_extension** with name of your file
 
 ```{r, warning=F, message=F}
+# Load the validated transcript data
+transcript_data_validated <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = "2. Processed Data/01_tr_transcript_validated.csv"
+)
 
-raw_data_folder_path <- "District Partners/Nashville/Nashville - HS Pathways - 2025/1. Data & Analysis - Secure/Transcript Analysis"
+# Load the validated student data
+student_data_validated <- ers_read_sharepoint(
+  folder_path = raw_data_folder_path,
+  file_name_with_extension = "2. Processed Data/01_tr_student_validated.csv"
+)
 
-#transcript data
-transcript_data_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "MNPS_Transcript_Validated.csv",
-  drive_name = "client_work_drive")
-
-#student data
-student_data_validated <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "MNPS_Stu_Rollup.csv",
-  drive_name = "client_work_drive")
-
-#course catalog data
-past_course_catalog <- ers_read_sharepoint(folder_path = raw_data_folder_path,
-                   file_name_with_extension = "03_course_coding_24-25 - CODED 10.24.xlsx",
-                   drive_name = "client_work_drive")
-
+# Load the course catalog data from the source of truth folder
+course_catalog <- ers_read_sharepoint(
+  folder_path = source_of_truth_folder_path,
+  file_name_with_extension = config$source_of_truth_files$course_catalog
+)
 ```
 
 ### 1.4 View your data
@@ -598,7 +602,6 @@ student_check_4 <- student_transcript_rollup %>%
   filter(D_stu_id == 190137047) %>%
   print()
 
-
 ```
 
 
@@ -669,8 +672,7 @@ cohort_selection %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
   print()
 
-
-#Okay, so now we want to assign students a 4 year home school, or grouping by D_stu_id and C_year_home_school, create a new column called C_four_year_home_school that takes whichever C_year_home_school value the student spent the majority of their 4 years at. So if a student has 3 rows with C_year_home_school = "School A" and 1 row with C_year_home_school = "School B", they get assigned "School A" as their C_four_year_home_school. If a student has 2 and 2, they get assigned randomly.
+# Okay, so now we want to assign students a 4 year home school, or grouping by D_stu_id and C_year_home_school, create a new column called C_four_year_home_school that takes whichever C_year_home_school value the student spent the majority of their 4 years at. So if a student has 3 rows with C_year_home_school = "School A" and 1 row with C_year_home_school = "School B", they get assigned "School A" as their C_four_year_home_school. If a student has 2 and 2, they get assigned randomly.
 cohort_selection <- cohort_selection %>%
   group_by(D_stu_id, C_year_home_school) %>%
   mutate(M_years_at_school = n()) %>%
@@ -694,19 +696,17 @@ cohort_selection %>%
   filter(count > 1) %>%
   print()
 
-
- 
 ```
 
 ####D. Look at Unique Home School names and filter to just AON schools
 ```{r}
-#First lets look at all of the unique values for home_school
+# First lets look at all of the unique values for home_school
 cohort_selection %>%
   group_by(C_four_year_home_school) %>%
   distinct(C_four_year_home_school) %>%
   print()
 
-#Okay great. Now lets filter to just the AON schools
+# Okay great. Now lets filter to just the AON schools
 # Step 1: Create a vector of schools to include
 schools_to_include <- c(
   "Hunters Lane High",
@@ -725,11 +725,11 @@ schools_to_include <- c(
   "Hillwood High"
 )
 
-#ungroup
+# Ungroup
 cohort_selection <- cohort_selection %>%
   ungroup()
 
-#How many students in those schools (AON home schools?)
+# How many students in those schools (AON home schools?)
 cohort_selection %>%
   filter(C_four_year_home_school %in% schools_to_include) %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
@@ -737,7 +737,7 @@ cohort_selection %>%
 
 #3,014, thats a big cut
 
-#How many students with a location other than an AON home school?
+# How many students with a location other than an AON home school?
 cohort_selection %>%
   filter(!C_four_year_home_school %in% schools_to_include) %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
@@ -745,7 +745,7 @@ cohort_selection %>%
 
 #1954
 
-#what are the most common non-AON home schools?
+# What are the most common non-AON home schools?
 cohort_selection %>%
   filter(!C_four_year_home_school %in% schools_to_include) %>%
   group_by(C_four_year_home_school) %>%
@@ -753,13 +753,13 @@ cohort_selection %>%
   arrange(desc(distinct_students)) %>%
   print(n = Inf)
 
-#and how many students in the cohort had ANY enrollment at non-include schools?
+# And how many students in the cohort had ANY enrollment at non-include schools?
 cohort_selection %>%
   filter(!C_year_home_school %in% schools_to_include) %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
   print()
 
-#and how many WERE included
+# And how many WERE included
 cohort_selection %>%
   filter(C_year_home_school %in% schools_to_include) %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
@@ -772,31 +772,29 @@ cohort_selection_filtered <- cohort_selection %>%
 # Optional: check distinct schools to make sure only the included ones remain
 distinct(cohort_selection_filtered, C_four_year_home_school)
 
-#Awesome
+# Awesome
 
-#quickly rename "James Lawson High" to "James Lawson High School" because they are the same
+# Quickly rename "James Lawson High" to "James Lawson High School" because they are the same
 cohort_selection <- cohort_selection %>%
   mutate(C_four_year_home_school = ifelse(C_four_year_home_school == "James Lawson High", "James Lawson High School", C_four_year_home_school))
 
-
-#and how many students in the cohort had ANY enrollment at non-include schools?
+# And how many students in the cohort had ANY enrollment at non-include schools?
 cohort_selection_filtered %>%
   filter(!C_year_home_school %in% schools_to_include) %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
   print()
 
-#and how many WERE included
+# And how many WERE included
 cohort_selection_filtered %>%
   filter(C_year_home_school %in% schools_to_include) %>%
   summarise(distinct_students = n_distinct(D_stu_id)) %>%
   print()
 
-
 ```
 
 ####D2. MNPS Check- non AON home school students
 ```{r}
-#Doing a check for MNPS to check of students at an AON home high school with enrollment at an alt school location, how many were AON for 10, 11, 12, and just non AON for 9th?
+# Doing a check for MNPS to check of students at an AON home high school with enrollment at an alt school location, how many were AON for 10, 11, 12, and just non AON for 9th?
 
 # MNPS check:
 # Of students at an AON home high school with enrollment at an alt school location,

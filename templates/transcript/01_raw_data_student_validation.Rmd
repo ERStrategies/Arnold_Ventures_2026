@@ -74,10 +74,9 @@ student_dem_raw <- student_dem_raw %>% clean_names()
 -   **Project Team Action:** Definitely change (see guidance in code block)
 
 ```{r}
-# Rename demographic columns to standard names, then keep only what we need
+# Rename demographic columns to standard names from tr_[district].yaml
 student_dem_raw <- student_dem_raw |>
   rename(any_of(unlist(config$column_map$demographics)))
-
 ```
 
 #### b. Review columns
@@ -736,6 +735,6 @@ student_check_6 <- student_dem_raw %>%
 # Export to 2. Processed Data --> 2. Transcript folder on SharePoint
 ers_write_sharepoint(data = stu_roll_up,
                      folder_path = raw_data_folder_path,
-                     file_name_with_extension = "/2. Processed Data/01_tr_stu_rollup.csv",
+                     file_name_with_extension = "/2. Processed Data/01_tr_student_validated.csv",
                      drive_name = "client_work_drive")
 ```
