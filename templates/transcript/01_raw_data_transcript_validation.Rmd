@@ -181,8 +181,8 @@ transcript_all_yrs %>%
 
 #Are any course IDs in Catalog NA?
 course_catalog %>%
-  filter(is.na(C_course_id_clean)) %>% 
-  select(C_course_name, C_course_id_clean) %>% 
+  filter(is.na(C_course_id)) %>% 
+  select(C_course_name, C_course_id) %>% 
   distinct() %>% 
   print()
 
@@ -683,8 +683,8 @@ transcript_all_yrs <- transcript_all_yrs %>%
   mutate(course_id_cleaned = str_replace(D_course_id, "([[:punct:]]?\\s*)?(S1|S2)\\s*$", ""))
 
 # Step 2. Get distinct IDs from both sources
-course_catalog_ids <- unique(course_catalog$C_course_id_clean)
-transcript_ids <- unique(transcript_all_yrs$course_id_cleaned)
+course_catalog_ids <- unique(course_catalog$D_course_id)
+transcript_ids <- unique(transcript_all_yrs$D_course_id)
 
 # Step 3. Compare
 ids_in_both       <- intersect(transcript_ids, course_catalog_ids)
@@ -706,10 +706,10 @@ transcript_courses_not_in_catalog <- transcript_all_yrs %>%
 
 #Create a data-frame of the unique course IDs that are only in the transcript data, not in the course catalog
 transcript_courses_not_in_catalog <- transcript_all_yrs %>%
-  filter(course_id_cleaned %in% ids_only_transcript) %>%
-  select(course_id_cleaned, D_course_name) %>%
+  filter(D_course_id %in% ids_only_transcript) %>%
+  select(D_course_id, D_course_name) %>%
   distinct() %>%
-  arrange(course_id_cleaned) %>%
+  arrange(D_course_id) %>%
   print()
 
 ```
@@ -987,7 +987,7 @@ students_MZ59525AL <- transcript_all_yrs %>%
 # Create df of unique D_course_id and D_course_name pairs
 unique_course_catalog <- transcript_all_yrs %>%
   filter(!is.na(D_course_name) & !is.na(D_stu_grade)) %>%
-  select(D_course_id, course_name_cleaned) %>%
+  select(D_course_id, D_course_name) %>%
   distinct() %>%
   group_by(D_course_id) %>%
   mutate(course_name_count = n()) %>%

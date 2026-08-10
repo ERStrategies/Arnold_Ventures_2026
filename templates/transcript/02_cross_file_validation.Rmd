@@ -63,7 +63,7 @@ student_data_validated <- ers_read_sharepoint(
 
 # Load the course catalog data from the source of truth folder
 course_catalog <- ers_read_sharepoint(
-  folder_path = source_of_truth_folder_path,
+  folder_path = raw_data_folder_path,
   file_name_with_extension = config$source_of_truth_files$course_catalog
 )
 ```

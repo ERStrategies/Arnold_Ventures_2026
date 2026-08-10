@@ -209,43 +209,31 @@ s03 <- tr_stage(
 
     # ================================================================
     # CHECK 3.0: Do the computed weights and minutes look right?
-    # Shows a handful of real classes so you can verify by hand:
-    #   - Does the weight make sense for that term/expression combo?
-    #   - Does the minutes value match the bell schedule?
+    # Format-agnostic AND crash-proof: only selects columns that exist,
+    # shows the raw time value(s) as a readable label (no expression parsing).
     # ================================================================
     tr_check("3.0", "Class weight & minutes — do a few real classes look right?",
       good  = "term x rotation x period reconciles by hand; minutes come from the bell schedule; the two are separate.",
       evidence = function() {
-        # Pick 10 classes with distinct weight values (to show variety)
-        sample_classes <- cs_data |>
-          filter(!is.na(C_class_id)) |>
-          distinct(
-            C_class_id, D_location_name, D_expression, D_term,
-            D_course_name, M_cls_class_weight, M_cls_class_minutes
-          ) |>
-          distinct(M_cls_class_weight, .keep_all = TRUE) |>
-          slice_sample(n = 10) |>
-          arrange(desc(M_cls_class_weight)) |>
-          # "serialized" shows the parsed expression in a readable form
-          # (e.g., "Mon P1, Mon P2, Wed P1, Wed P2")
-          mutate(
-            serialized = vapply(
-              D_expression,
-              function(expr) serialize_meetings(parse_expression(expr, spec)),
-              character(1)
-            )
-          ) |>
-          transmute(
-            D_location_name,
-            expression = D_expression,
-            serialized,
-            D_term,
-            course = D_course_name,
-            M_cls_class_weight,
-            M_cls_class_minutes
-          )
+        tk   <- config$time_cols[[config$time_format]]        # D_period/D_rotation OR D_expression, from config
+        keep <- intersect(c("C_class_id", "D_location_name", tk, "D_term",
+                            "D_course_name", "M_cls_class_weight", "M_cls_class_minutes"),
+                          names(cs_data))                    # only columns that actually exist
 
-        sample_classes
+        d <- cs_data |>
+          filter(!is.na(C_class_id)) |>
+          distinct(across(all_of(keep))) |>
+          distinct(M_cls_class_weight, .keep_all = TRUE) |>  # one row per distinct weight (variety)
+          slice_sample(n = 10) |>
+          arrange(desc(M_cls_class_weight))
+
+        # one readable "time" column from whatever time cols exist (both formats)
+        tk_here <- intersect(tk, names(d))
+        d$time  <- apply(d[tk_here], 1, function(r) paste(r[!is.na(r)], collapse = " "))
+        d$course <- d$D_course_name
+
+        d |> select(any_of(c("D_location_name", "time", "D_term", "course",
+                             "M_cls_class_weight", "M_cls_class_minutes")))
       }
     ),
 
