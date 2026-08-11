@@ -59,7 +59,7 @@ source(here::here("templates", "course_schedule", "helpers", "01_cs_explore_help
 source(here::here("templates", "course_schedule", "helpers", "01_cs_review_helpers.R"))
 
 # Read the district config — tells us where to find files, how to rename columns, etc.
-config <- yaml::read_yaml(here::here("config", "districts", "nashville.yaml"))
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
 source_of_truth_folder_path <- config$source_of_truth_folder_path
 ```
@@ -157,6 +157,26 @@ that matches the student ID column in the CS profile — that's your join key.
 explore_gt(explore_profile(stu_demographics), "Raw student demographics — every column")
 ```
 
+## Course schedule — duplicate check (raw)
+
+Counts full-row duplicates in the raw file before any processing. Duplicates
+here indicate a SIS export issue, not a pipeline problem.
+
+```{r cs-duplicate-check-raw}
+n_raw      <- nrow(cs_raw)
+n_distinct <- nrow(distinct(cs_raw))
+n_dupes    <- n_raw - n_distinct
+
+explore_gt(
+  data.frame(
+    check = c("Total rows", "Fully distinct rows", "Duplicate rows"),
+    n     = c(n_raw, n_distinct, n_dupes),
+    pct   = c(100, round(100 * n_distinct / n_raw, 1), round(100 * n_dupes / n_raw, 1))
+  ),
+  "Duplicate check — raw file"
+)
+```
+
 ## Prep edits (staging)
 
 Your scratch space to shape the raw data into what the pipeline needs. Each edit
@@ -178,7 +198,9 @@ config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml")
 cs_prepped <- cs_raw |>
   rename(any_of(unlist(config$column_map$course_schedule))) |>
   # Drop any columns that weren't mapped to a D_ name
-  select(any_of(names(unlist(config$column_map$course_schedule))))
+  select(any_of(names(unlist(config$column_map$course_schedule)))) |>
+  # Drop fully identical duplicate rows from the raw data
+  distinct()
 
 # ---- Step 2: MERGE student demographics ----
 # Join demographic data (race, grade, SWD, ELL, FRL) onto the schedule.
@@ -226,6 +248,15 @@ if (!is.null(config$scope$filters)) {
   }
 }
 
+# ---- Step 4: STUDENT SNAPSHOT ----
+# For longitudinal enrollment data, flag each row as "Include"/"Exclude" based
+# on whether the student was enrolled on the configured snapshot date for that term.
+# Skipped entirely for snapshot districts.
+if (!is.null(config$intake$enrollment_type) &&
+    config$intake$enrollment_type != "snapshot") {
+  cs_prepped <- apply_stu_snapshot(cs_prepped, config)
+}
+
 # ---- Step 4: OTHER edits ----
 # eg., updating null values to 0, etc.
 cs_prepped <- cs_prepped |>
@@ -237,6 +268,27 @@ cs_prepped <- cs_prepped |>
   )
 ```
 
+
+## Reinvestigate — duplicate check (prepped)
+
+Confirms that deduplication worked and no new duplicates were introduced by
+the demographics join or other prep steps.
+
+```{r cs-duplicate-check-prepped}
+n_prepped         <- nrow(cs_prepped)
+n_prepped_distinct <- nrow(distinct(cs_prepped))
+n_prepped_dupes   <- n_prepped - n_prepped_distinct
+
+explore_gt(
+  data.frame(
+    check = c("Total rows", "Fully distinct rows", "Duplicate rows"),
+    n     = c(n_prepped, n_prepped_distinct, n_prepped_dupes),
+    pct   = c(100, round(100 * n_prepped_distinct / n_prepped, 1),
+                   round(100 * n_prepped_dupes    / n_prepped, 1))
+  ),
+  "Duplicate check — after prep"
+)
+```
 
 ## Reinvestigate — profile after edits
 

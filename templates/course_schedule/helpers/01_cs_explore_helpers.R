@@ -77,6 +77,36 @@ explore_gt <- function(df, title = NULL) {
     opt_table_font(font = "system-ui")
 }
 
+# ---- Student snapshot filtering ---------------------------------------------
+# For districts that provide longitudinal enrollment data (not a single
+# snapshot), this function flags each row as "Include" or "Exclude" based on
+# whether the student was enrolled on the configured snapshot date for that term.
+#
+# A student is included if:
+#   D_stu_enter_date <= snapshot_date AND D_stu_exit_date >= snapshot_date
+#
+# Triggered in the prep chunk when config$intake$enrollment_type != "snapshot".
+# Snapshot dates are set per-term in config$intake$snapshot_dates.
+apply_stu_snapshot <- function(df, config) {
+  snapshot_dates <- lapply(
+    config$intake$snapshot_dates,
+    function(d) as.Date(d)
+  )
+
+  df |>
+    mutate(C_stu_snapshot = {
+      term     <- as.character(D_term)
+      snap     <- as.Date(unlist(snapshot_dates)[term])
+      entered  <- as.Date(D_stu_enter_date)
+      exited   <- as.Date(D_stu_exit_date)
+      ifelse(
+        !is.na(snap) & !is.na(entered) & !is.na(exited) &
+          entered <= snap & exited >= snap,
+        "Include", "Exclude"
+      )
+    })
+}
+
 # Render a named list of frames as stacked tables.
 explore_render <- function(named_frames, prefix = "Values \u00B7 ") {
   htmltools::tagList(lapply(names(named_frames), function(nm) {

@@ -74,8 +74,18 @@ source_of_truth_files:
 # ===========================================================================
 intake:
   # Is this a single snapshot of schedules, or does it track enrollment over time?
-  enrollment_type: snapshot
-  snapshot_date: null
+  # Use "not_snapshot" to trigger snapshot date filtering in Stage 01.
+  enrollment_type: not_snapshot
+
+  # SNAPSHOT DATES: One date per term — students must have entered on/before
+  # and not yet exited by this date to be included (C_stu_snapshot = "Include").
+  # To choose a date: look at the distribution of enter/exit dates per term and
+  # pick a stable mid-term date, avoiding the first and last week.
+  snapshot_dates:
+    Q1: "2024-09-16"
+    Q2: "2024-11-18"
+    Q3: "2025-02-10"
+    Q4: "2025-04-14"
 
 # ===========================================================================
 # SECTION 3: COLUMN MAP — What are the district's column names?
@@ -98,6 +108,12 @@ column_map:
     D_course_section_id: sec
     D_period:            per
     D_term:              term
+    D_term_start:        terms
+    D_term_end:          terme
+    D_stu_enter_date:    cous
+    D_stu_exit_date:     coue
+    D_active_flag:       active
+    D_primary_flag:      primary
 
   demographics:
     D_stu_id:            cid
@@ -145,7 +161,9 @@ scope:
 
   # Additional row filters as R expressions. Rows that do NOT satisfy all
   # expressions are dropped. Use standard R syntax.
-  filters: ["D_stu_grade >= 9"]
+  filters:
+    - "D_stu_grade >= 9"
+    - "D_term != 'Q2' | (!is.na(D_active_flag) & D_active_flag == 1)"
 
 
 # ===========================================================================
