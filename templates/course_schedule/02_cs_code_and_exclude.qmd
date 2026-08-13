@@ -59,7 +59,7 @@ source(here::here("templates", "course_schedule", "helpers", "02_cs_expression_h
 # Read the district configuration file — THIS DRIVES NEARLY EVERYTHING!
 # column mappings, exclusion rules, term weights, class ID recipes, etc.
 config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
-raw_data_folder_path <- config$raw_data_folder_pathz
+raw_data_folder_path <- config$raw_data_folder_path
 source_of_truth_folder_path <- config$source_of_truth_folder_path
 ```
 
@@ -67,7 +67,9 @@ source_of_truth_folder_path <- config$source_of_truth_folder_path
 #| results: 'asis'
 #| echo: false
 cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
+```
 
+```{r load-data}
 # Connect to the SharePoint site where data lives.
 orgfiles_site_url <- "https://erstrategies1.sharepoint.com/sites/orgfiles"
 orgfiles_site     <- get_sharepoint_site(site_url = orgfiles_site_url)

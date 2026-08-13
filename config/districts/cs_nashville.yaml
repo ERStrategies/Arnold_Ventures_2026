@@ -282,6 +282,12 @@ weights:
     by_period: { MISC: 0, CCR: 0 }
     by_school: {}
 
+# --- periods_per_school
+# Keys must EXACTLY match the school names in C_tch_location_name (see 4.4 evidence).
+# Fill in each school's real period count from its bell schedule (this is the
+# utilization denominator; e.g. a 7-period day = 7, a block day with advisory = 4.2).
+periods_per_school:
+  default: 7
 
 # ===========================================================================
 # SECTION 10: BELL MINUTES — Actual clock time per period
@@ -357,3 +363,4 @@ self_contained:
 # Class size buckets for reporting (min and max of each bucket)
 buckets:
   class_size: [[0, 6], [7, 12], [13, 18], [19, 24], [25, 30], [31, 35], [36, null]]
+  teacher_load: [[0, 34], [35, 74], [75, 124], [125, 199], [200, null]]

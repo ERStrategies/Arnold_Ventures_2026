@@ -10,13 +10,16 @@
 
 suppressPackageStartupMessages({ library(dplyr); library(tidyr) })
 
-# config-driven bucketing: buckets are an ordered list of {max, label}; a value
-# falls in the first bucket whose max it does not exceed. NA / negative -> NA.
+# config-driven bucketing: buckets are an ordered list of [min, max] PAIRS
+# (last max may be null = no upper bound). Labels derived as "min-max" / "min+".
+# A value falls in the bucket whose min it meets but the next bucket's does not.
 .bucketize <- function(x, buckets) {
-  labels <- vapply(buckets, function(b) b$label, character(1))
-  maxes  <- vapply(buckets, function(b) as.numeric(b$max), numeric(1))
-  i   <- findInterval(x, c(-Inf, maxes), left.open = TRUE)
-  lab <- ifelse(is.na(x) | x < 0 | i < 1 | i > length(labels), NA_character_, labels[i])
+  mins   <- vapply(buckets, function(b) as.numeric(b[[1]]), numeric(1))
+  maxs   <- vapply(buckets, function(b) { m <- b[[2]]; if (is.null(m)) Inf else as.numeric(m) }, numeric(1))
+  labels <- vapply(seq_along(buckets), function(k)
+    if (is.infinite(maxs[k])) paste0(mins[k], "+") else paste0(mins[k], "-", maxs[k]), character(1))
+  i   <- findInterval(x, mins)                       # x >= mins[i]
+  lab <- ifelse(is.na(x) | i < 1 | i > length(labels), NA_character_, labels[i])
   factor(lab, levels = labels)
 }
 
@@ -82,7 +85,7 @@ add_class_size <- function(unified, config) {
            M_cls_class_size  = as.numeric(sum(M_student_count_adjusted, na.rm = TRUE)),
            M_cls_class_size_diff = M_cls_num_stu - M_cls_class_size) |>
     ungroup() |>
-    mutate(C_cls_class_size_bucket = .bucketize(M_cls_class_size, config$rollup_buckets$class_size))
+    mutate(C_cls_class_size_bucket = .bucketize(M_cls_class_size, config$buckets$class_size))
 }
 
 # --- teacher metrics ---------------------------------------------------------
@@ -120,7 +123,7 @@ add_teacher_metrics <- function(unified, config) {
     group_by(C_tch_location_name, D_employee_id) |>
     mutate(M_tch_load = n_distinct(D_stu_id[C_teacher_load_exclude == "Include"])) |>
     ungroup() |>
-    mutate(M_tch_load_bucket = .bucketize(M_tch_load, config$rollup_buckets$teacher_load))
+    mutate(M_tch_load_bucket = .bucketize(M_tch_load, config$buckets$teacher_load))
 }
 
 

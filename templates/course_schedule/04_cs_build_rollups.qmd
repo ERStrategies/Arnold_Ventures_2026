@@ -92,9 +92,9 @@ if (grades_on) {
 ```
 
 ```{r build-rollups}
-teacher_rollup <- build_teacher_rollup(unified)
-class_rollup   <- build_class_rollup(unified, teacher_rollup)
-student_rollup <- build_student_rollup(unified)
+teacher_rollup <- build_teacher_rollup(unified, config)
+class_rollup   <- build_class_rollup(unified, teacher_rollup, config)
+student_rollup <- build_student_rollup(unified, config)
 ```
 
 ```{r precompute-checks}
@@ -105,6 +105,7 @@ size_invariant <- tr_safe(all(class_rollup$M_cls_class_size <= class_rollup$M_cl
 cls_bucket_na <- tr_safe(class_rollup |> filter(C_class_size_exclude == "Include") |>
   summarise(n = sum(is.na(C_cls_class_size_bucket))) |> pull(n), NA)
 tch_bucket_na <- tr_safe(teacher_rollup |> summarise(n = sum(is.na(M_tch_load_bucket))) |> pull(n), NA)
+bucket_levels <- tr_safe(levels(.bucketize(0, config$buckets$class_size)), character(0))
 
 # 4.4 teacher utilization populated
 util_na <- tr_safe(teacher_rollup |> summarise(n = sum(is.na(M_tch_utilization))) |> pull(n), NA)
@@ -121,6 +122,24 @@ miss_class <- setdiff(want_class, names(class_rollup))
 miss_tch   <- setdiff(want_tch,   names(teacher_rollup))
 miss_stu   <- setdiff(want_stu,   names(student_rollup))
 contract_ok <- length(miss_class)==0 && length(miss_tch)==0 && length(miss_stu)==0
+
+bucket_levels <- tr_safe(levels(.bucketize(0, config$buckets$class_size)), character(0))
+
+# 4.2 class size distribution by school 
+dist_by_school <- tr_safe(
+  class_rollup |>
+    filter(C_class_size_exclude == "Include") |>
+    group_by(C_cls_location_name, C_class_id) |>
+    summarise(bucket = C_cls_class_size_bucket[which.max(M_cls_class_size)], .groups = "drop") |>
+    count(C_cls_location_name, bucket) |>
+    group_by(C_cls_location_name) |>
+    mutate(pct = round(100 * n / sum(n), 1)) |>
+    ungroup() |> select(-n) |>
+    pivot_wider(names_from = bucket, values_from = pct, values_fill = 0, names_expand = TRUE) |>
+    select(C_cls_location_name, any_of(bucket_levels)) |>
+    rename(School = C_cls_location_name),
+  data.frame())
+
 ```
 
 ## 04 — Rollups & export-readiness
@@ -142,14 +161,16 @@ s04 <- tr_stage(
         cols   = c(ncol(class_rollup), ncol(teacher_rollup), ncol(student_rollup),
                    if (!is.null(grades_rollup)) ncol(grades_rollup)))),
 
-    tr_check("4.2", "Class size adjusted correctly",
-      good = "Adjusted class size never exceeds the raw headcount — double-booked students count as a fraction, never more.",
-      value  = if (size_invariant) "PASS" else "FAIL — an adjusted size exceeds raw headcount",
+    tr_check("4.2", "Class size — distribution by school (% of classes per size band)",
+      good = "Adjusted size never exceeds raw headcount; the table shows the share of classes in each size band, by school.",
+      value  = if (size_invariant) "PASS — adjusted \u2264 raw headcount" else "FAIL — an adjusted size exceeds raw headcount",
       status = if (size_invariant) "ok" else "flag",
-      evidence = function() class_rollup |>
-        summarise(classes = n(),
-                  avg_raw_headcount = round(mean(M_cls_num_stu, na.rm=TRUE),1),
-                  avg_adjusted_size = round(mean(M_cls_class_size, na.rm=TRUE),1))),
+      evidence = function() list(
+        "Class-size distribution — % of classes per bucket, by school" = dist_by_school,
+        "Adjusted vs raw headcount" = class_rollup |>
+          summarise(classes = n_distinct(C_class_id),
+                    avg_raw_headcount = round(mean(M_cls_num_stu, na.rm = TRUE), 1),
+                    avg_adjusted_size = round(mean(M_cls_class_size, na.rm = TRUE), 1)))),
 
     tr_check("4.3", "Class-size & teacher-load buckets populated",
       good = "Every included class has a size bucket; every teacher has a load bucket (config buckets cover the data).",
