@@ -93,11 +93,26 @@ validate_config <- function(cfg) {
                 paste(unique(trimmed[duplicated(trimmed)]), collapse = ", ")))
   }
 
-  # --- derived / thresholds -------------------------------------------------
+  # --- derived --------------------------------------------------------------
   need(has(cfg$derived$transcript_year_from),
        "Missing `derived$transcript_year_from` (which column becomes D_year on the transcript)")
+  for (d in c("D_stu_enter_date", "D_stu_exit_date")) {
+    need(has(cfg$derived$date_formats[[d]]),
+         paste0("Missing `derived$date_formats$", d, "`"))
+  }
+  need(has(cfg$derived$location_name_strip_prefix) ||
+       has(cfg$derived$location_name_strip_suffix),
+       "Missing `derived$location_name_strip_prefix` / `_suffix`")
+
+  # --- scope ----------------------------------------------------------------
+  need(has(cfg$scope$demographics), "Missing `scope$demographics`")
+  need(has(cfg$scope$transcript),   "Missing `scope$transcript`")
+
+  # --- thresholds -----------------------------------------------------------
   need(has(cfg$thresholds$min_course_coding_match_pct),
        "Missing `thresholds$min_course_coding_match_pct`")
+  need(has(cfg$thresholds$min_student_match_pct),
+       "Missing `thresholds$min_student_match_pct`")
 
   if (length(problems) > 0) {
     stop("\nConfig validation failed (", length(problems), " problem",

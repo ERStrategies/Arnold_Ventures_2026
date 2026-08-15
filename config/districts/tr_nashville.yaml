@@ -2,10 +2,11 @@
 # tr_nashville.yaml — District config for the TRANSCRIPT pipeline
 #
 # New district = copy this file, edit the values, change no code.
-# Anything district-specific belongs here. If you find yourself editing a file
-# in R/ to onboard a district, that value should have been in this file.
+# If you find yourself editing a file in templates/transcript/ to onboard a
+# district, that value should have been in this file.
 #
-# Lines marked TODO need a decision from you before the pipeline is trusted.
+# Values below were confirmed against the source profile run 2026-08-15
+# unless marked TODO.
 # =============================================================================
 
 
@@ -18,19 +19,17 @@ year: "2021-22 to 2024-25"
 
 raw_data_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/2. Transcript"
 raw_files:
-  transcript_raw:    "/0. Raw Data/Transcripts_2122to2425.csv"
-  stu_demographics:  "/0. Raw Data/Demographics_2122to2425.csv"
+  transcript_raw:    "/0. Raw Data/Transcripts_2122to2425.csv"    # 1,501,192 x 9
+  stu_demographics:  "/0. Raw Data/Demographics_2122to2425.csv"   #   119,308 x 11
 
 source_of_truth_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/3. Source of Truth"
 source_of_truth_files:
-  course_coding:     "/mnps_course_coding_2122_2425.xlsx"   # the final ERS-coded file
+  course_coding:     "/mnps_course_coding_2122_2425.xlsx"
   location_coding:   "/mnps_high_schools.xlsx"
 
-# Sheet names for Excel sources. Omit or leave null for the first sheet.
 sheets:
-  course_coding:     null                                    # TODO confirm
+  course_coding:     null    # TODO confirm sheet name
 
-# SharePoint drive per source group. Omit a key to use the default drive.
 drives:
   raw_data:          null
   source_of_truth:   null
@@ -38,20 +37,19 @@ drives:
 
 
 # ===========================================================================
-# 2. PATHS — local working locations
-# Cache holds student-level data. Keep it inside your secure area and
-# out of git (see .gitignore).
+# 2. PATHS
+# The cache holds student-level data. Keep it inside the secure area and out
+# of git. The supplied .gitignore blocks it; confirm the path is right.
 # ===========================================================================
 
 paths:
-  cache_dir:  null    # null = <repo>/cache/nashville
-  output_dir: null    # null = <repo>/output/nashville
+  cache_dir:  null
+  output_dir: null
   output_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/2. Transcript/2. Processed Data"
 
 
 # ===========================================================================
-# 3. COLUMN MAP — standard_name: district_column_name
-# Right-hand values are post-janitor::clean_names(), i.e. snake_case.
+# 3. COLUMN MAP — standard_name: district_column_name (post clean_names)
 # ===========================================================================
 
 column_map:
@@ -81,122 +79,313 @@ column_map:
 
 
 # ===========================================================================
-# 4. DERIVED FIELDS — things the pipeline builds rather than reads
+# 4. DERIVED FIELDS
 # ===========================================================================
 
 derived:
-  # The transcript file has no year column. D_year is created from this one so
-  # it can join to demographics on student + year.
-  # TODO confirm D_end_year is the right school year for a transcript row.
+  # CONFIRMED: transcript end_year is 2022-2025, demographics year is 2022-2025,
+  # identical value sets. end_year is the school year the row belongs to.
   transcript_year_from: D_end_year
 
-  # Date parsing formats. Enter/exit arrive in different formats in the
-  # Nashville demographics export.
+  # CONFIRMED: BOTH date columns arrive as m/d/yyyy. The old script asked for
+  # %Y-%m-%d on the exit date, which returned NA for every value.
   date_formats:
-    D_stu_enter_date: "%m/%d/%Y"
-    D_stu_exit_date:  "%Y-%m-%d"
+    D_stu_enter_date: ["%m/%d/%Y"]
+    D_stu_exit_date:  ["%m/%d/%Y"]
 
-  # Students with no exit date are treated as enrolled to the end of the year.
+  # 75.5% of exit dates are missing. Treated as "still enrolled at year end".
+  # TODO confirm this reading with the district before trusting duration.
   force_missing_exit_date: true
   school_year_end_mmdd: "06-30"
 
-  # Term is read off the course name suffix, since the transcript has no term
-  # column. Rules are applied in order; first match wins.
-  term_from_course_name:
-    - { pattern: "S1", value: "Semester 1" }
-    - { pattern: "S2", value: "Semester 2" }
+  # Clamp enrolment spells to the school year so a multi-year entry date
+  # cannot produce a 1,200-day "year".
+  clamp_days_to_school_year: true
+  school_year_start_mmdd: "08-01"
 
-  # Suffix stripped from transcript course IDs before matching the coded file.
+  # Term is derived; the transcript has no term column.
+  # CONFIRMED: the S1/S2 marker is on course_number for 98.9% of rows and on
+  # course_name for 96.8%, so the number is tried first and the name is the
+  # fallback. Trailing asterisks and a bare " S" are tolerated.
+  term_detection:
+    sources: [D_course_id, D_course_name]
+    rules:
+      - { pattern: 'S1\s*\*?\s*$', value: "Semester 1" }
+      - { pattern: 'S2\s*\*?\s*$', value: "Semester 2" }
+
+  # Handling of enrolment spells that fall outside the school-year window.
+  # 188 rows produced negative days: entry dates of 1-16 July recorded against
+  # the year that had just ended.
+  #   floor_zero  keep the spell, set days to 0
+  #   drop        remove the spell entirely
+  #   keep        leave the negative value (it will subtract at Stage 5)
+  negative_days_treatment: floor_zero
+
+  # CONFIRMED: the S1/S2 suffix lives on course_number (98.9% of rows), e.g.
+  # "ENG1302S1". Stripped to get the base course for the coding join.
   course_id_strip_suffix: '([[:punct:]]?\s*)?(S1|S2)\s*$'
 
-  # Location names carry numbers in the demographics export; strip for matching.
-  location_name_strip_pattern: '[0-9-]'
+  # School names carry a year stamp and a grade span, and are truncated at
+  # ~24 characters: "24-25 Early College High Schoo".
+  # The old pattern '[0-9-]' also destroyed real hyphens, turning
+  # "Pearl-Cohn High" into "PearlCohn High". These strip only the decoration.
+  location_name_strip_prefix: '^[0-9]{2}-[0-9]{2}\s+'
+  location_name_strip_suffix: '\s+[0-9]{1,2}-[0-9]{1,2}$'
 
 
 # ===========================================================================
-# 5. SCOPE — which rows are usable at all
+# 5. VALUE MAPS
+# Unmapped codes stop the pipeline rather than passing through silently.
+# ===========================================================================
+
+value_maps:
+  # CONFIRMED: single letters, no multiracial / two-or-more category present.
+  # TODO check with the district whether multiracial students are folded into
+  # one of these or omitted.
+  D_stu_race:
+    A: "Asian"
+    B: "Black"
+    H: "Hispanic"
+    I: "American Indian/Alaska Native"
+    P: "Native Hawaiian/Pacific Islander"
+    W: "White"
+
+# CONFIRMED integer 0/1 in the raw file. Kept as 0/1 rather than the old
+# "Yes"/"No" recode, which made them useless for arithmetic.
+flag_columns: [D_stu_ell, D_stu_swd, D_stu_frl]
+
+
+# ===========================================================================
+# 6. SCOPE
+# The old config filtered on D_stu_grade, which maps to `percent` — the course
+# grade, not the grade level. "D_stu_grade >= 9" kept anyone scoring above 9%.
 # ===========================================================================
 
 scope:
-  drop_when_null: ["D_stu_id", "D_stu_grade_level"]
-  filters: ["D_stu_grade_level >= 9"]
+  demographics:
+    drop_when_null: ["D_stu_id", "D_year", "D_location_id"]
+    filters: ["D_stu_grade_level_demo >= 9"]
+  transcript:
+    drop_when_null: ["D_stu_id", "D_course_id", "D_year"]
+    filters: []
+
+# Both files carry a grade level. They are kept apart by name rather than
+# colliding into .x / .y at the join, as they did in the old 02 script.
+grade_level_names:
+  transcript:   D_stu_grade_level_transcript
+  demographics: D_stu_grade_level_demo
 
 
 # ===========================================================================
-# 6. COHORT DEFINITION
-# Previously hardcoded across 02 and 03 in two places that disagreed.
+# 7. PLAUSIBLE RANGES
+# action: flag (report only) | na (blank the value) | stop (halt)
+# ===========================================================================
+
+# TWO TIERS, because "implausible" and "impossible" are different questions.
+#
+#   plausible  the range you would expect. Values outside are counted and
+#              reported, never halt. Grades of 100.05 are extra credit, not
+#              errors, so this tier is a description of the data, not a gate.
+#
+#   hard       the range beyond which a value cannot be a real measurement.
+#              Set hard_tolerance_pct to turn this into a gate: the run stops
+#              when more than that share falls outside. Set hard_action to na
+#              to blank those values so they cannot poison a mean.
+#
+# hard_tolerance_pct is deliberately unset on the first pass — read the
+# distributions in the report, then choose the bounds.
+ranges:
+  D_stu_grade:
+    plausible: { min: 0, max: 100 }
+    hard:      { min: 0, max: 200 }
+    hard_action: flag          # flag | na | stop
+    # hard_tolerance_pct: 0.1
+
+  D_creds_earn:
+    plausible: { min: 0, max: 2 }
+    hard:      { min: 0, max: 10 }
+    hard_action: flag
+    # hard_tolerance_pct: 0.1
+
+  D_creds_possible:
+    plausible: { min: 0, max: 2 }
+    hard:      { min: 0, max: 10 }
+    hard_action: flag
+    # hard_tolerance_pct: 0.1
+
+  M_days_enrolled:
+    plausible: { min: 0, max: 366 }
+    hard:      { min: 0, max: 400 }
+    hard_action: flag
+    hard_tolerance_pct: 0.1
+
+# Buckets used to describe the tail above the plausible maximum for grades.
+grade_tail_buckets: [100, 100.5, 101, 102, 105, 110, 120, 150, 200, 1000]
+
+# CREDITS EARNED EXCEEDING CREDITS ATTEMPTED
+# Tettra has no guidance on this, so it is a logged decision rather than an
+# inherited rule.
+#
+# Nashville shows three distinct patterns, and they deserve different answers:
+#   0.5 -> 1.0    7,072 rows. Regular enough to be a convention, not an error.
+#   0.0 -> 0.5    ~400 rows. Attempted defaulted to zero.
+#   0.5 -> >2     ~19 rows. Not a usable credit value.
+#
+# treatment applies to every row where earned > attempted:
+#   flag        add C_creds_earn_exceeds_attempted, change nothing
+#   na_earned   blank the earned figure
+#   drop        remove the row (loses the enrolment record — not recommended)
+#
+# impossible_above sets the point beyond which the credit figure cannot be
+# real. The enrolment is still real, so na is preferred to drop: the student
+# did take the course, we just cannot use the number.
+credits:
+  earned_exceeds_attempted:
+    treatment: flag              # flag | na_earned | drop
+  impossible_above: 2            # earned above this is not a usable value
+  impossible_treatment: na       # na | drop | keep
+
+# TERM DETECTION — candidate extra rule, under test.
+# Dual-enrolment course IDs appear as DA/DB pairs (SST5601DA / SST5601DB),
+# which may be a semester marker in a different dialect, or may be section A
+# and section B. Section 3.2a tests which. Do not enable until it is settled.
+term_detection_candidates:
+  enabled: false
+  rules:
+    - { pattern: 'DA\s*\*?\s*$', value: "Semester 1" }
+    - { pattern: 'DB\s*\*?\s*$', value: "Semester 2" }
+
+
+# ===========================================================================
+# 8. COHORT DEFINITION
+# Previously hardcoded in two places that disagreed.
 # ===========================================================================
 
 cohort:
-  entry_year:         2022    # D_year in which the cohort is in entry_grade
+  entry_year:         2022
   entry_grade:        9
   years_required:     4
   final_year:         2025
 
-  # Duration: minimum days enrolled to count a year as "present".
   duration_min_days:  200
-  duration_rule:      all_years    # all_years | bookends | none
+  duration_rule:      all_years      # all_years | bookends | none
 
-  # Progression: expected grade level by year.
   progression:
     2022: 9
     2023: 10
     2024: 11
     2025: 12
-  progression_rule:   all_years    # all_years | bookends | none
+  progression_rule:   all_years      # all_years | bookends | none
 
-  # M_days_enrolled had three competing definitions across the old scripts
-  # (exit-enter, sum of unique per student-year, max per student-year).
-  # This pins it to one. See notes in the .qmd.
-  # TODO confirm: sum is right if enrolment spells are non-overlapping.
-  days_enrolled_rule: sum_of_spells   # sum_of_spells | max_spell
+  # CONFIRMED: 11,142 student-years have 2+ demographics rows, of which ~10,689
+  # are genuinely multi-school. ~450 are repeat spells at the same school.
+  days_enrolled_rule: sum_of_spells  # sum_of_spells | max_spell
 
-  # Home school = school with the most days enrolled that year; ties broken by
-  # preferring a school in schools_to_include, then at random with the seed below.
   home_school_tiebreak: prefer_included
 
-  # Canonical school names. Aliases below are collapsed to these first, so a
-  # spelling variant cannot silently drop a school.
-  # TODO the old scripts disagreed: 02 had "Hillwood High", 03 had
-  #      "Hillwood High School". Confirm which is the real name in the data.
+  # Resolved to location_id (meno) at Stage 2 and matched by code thereafter.
+  # Names are the human-readable interface only.
+  #
+  # CONFIRMED against all 162 raw name values:
+  #   - "Hillwood High" is correct. "Hillwood High School" does not exist in
+  #     the data, so the old 03 script silently dropped Hillwood entirely.
+  #   - James Lawson appears as "James Lawson High" in 23-24 and
+  #     "James Lawson High School" in 24-25. Both are real; aliased below.
+  #   - James Lawson has no 21-22 or 22-23 enrolment; the school opened in
+  #     23-24, so no cohort member can have it as a home school for 4 years.
+  # LOCATION MERGES — locations that are one institution across time.
+  # Applied BEFORE the crosswalk is built, so schools_to_include names only the
+  # surviving location. Raw D_location_id is preserved; C_location_id carries
+  # the merged code that all downstream logic uses.
+  #
+  # Checked, not assumed: each name must resolve to exactly one code, and the
+  # merged locations must not operate in the same year. Two schools running
+  # concurrently are two schools; set allow_overlap: true to override.
+  location_merges:
+    - name: "James Lawson High"
+      absorbs: ["Hillwood High"]
+      effective_year: 2024
+      allow_overlap: false
+      reason: "Total campus relocation. MNPS moved all non-graduating students
+               and the teaching staff from the Hillwood building to the new
+               Bellevue facility for August 2023 (SY23-24), opening with roughly
+               1,200 students previously zoned for or attending Hillwood. The
+               two codes describe one continuous institution, so a student's
+               move between them is not a transfer."
+
+  # Names are the human-readable interface only; they resolve to codes at
+  # Stage 2 and everything downstream matches on the code.
+  #
+  # CONFIRMED against all 162 raw name values:
+  #   - "Hillwood High" is correct; "Hillwood High School" does not exist in the
+  #     data, so the old 03 script silently dropped Hillwood entirely.
+  #   - James Lawson appears as "James Lawson High" in 23-24 and "James Lawson
+  #     High School" in 24-25. Both are real; aliased below.
+  #   - Hillwood is absent from this list because it merges into James Lawson
+  #     above, which then covers all four years.
   schools_to_include:
     - "Antioch High School"
     - "Cane Ridge High School"
     - "Glencliff High School"
     - "Hillsboro High"
-    - "Hillwood High"
     - "Hunters Lane High"
     - "James Lawson High"
     - "John Overton High"
     - "Maplewood High"
     - "McGavock High"
-    - "PearlCohn High"
+    - "Pearl-Cohn High"
     - "Stratford"
     - "Whites Creek High School"
 
   school_name_aliases:
     "James Lawson High School": "James Lawson High"
-    "Hillwood High School":     "Hillwood High"
 
+  # SCHOOL PRESENCE ACROSS YEARS
+  # A missing school-year is sometimes a data problem and sometimes a fact about
+  # the district; the pipeline cannot tell. Declare exceptions here and an
+  # undeclared gap stops the run.
+  #
+  # Nashville needs no overrides once Hillwood merges into James Lawson, since
+  # the merged location then spans 2022-2025. Shape retained as documentation:
+  #
+  #   overrides:
+  #     "Some High School":
+  #       years: [2023, 2024, 2025]
+  #       reason: "Opened SY22-23."
+  school_year_expectations:
+    default: all_years
+    overrides: {}
+
+  # CREDIT RECOVERY SITES
+  # RESOLVED: these already carry the PARENT school's location code (e.g.
+  # "S2022 CR Cane Ridge HS" is code 182, same as Cane Ridge High School), so
+  # matching on the code rolls them up automatically. The flag is retained so
+  # those rows stay identifiable.
+  credit_recovery_name_pattern: '^S[0-9]{4}\s+CR\s+'
+  credit_recovery_treatment: map_to_parent   # exclude | map_to_parent | include
 
 # ===========================================================================
-# 7. THRESHOLDS — the numbers that trip a structural check
+# 9. THRESHOLDS — the numbers that trip a structural check
 # ===========================================================================
 
 thresholds:
-  # Course coding join. Below this share of transcript rows matched, stop.
-  # TODO set the real number once we see the first match rate at Stage 8.
-  min_course_coding_match_pct: 95
-
-  # Share of transcript students that must also appear in demographics.
-  min_student_match_pct: 95
+  min_course_coding_match_pct: 95   # TODO set once Stage 7 reports a real rate
+  min_student_match_pct: 99         # CONFIRMED 100% of transcript students
+                                    # appear in demographics
 
 
 # ===========================================================================
-# 8. TRACING — students followed by hand through every stage
-# Replaces the hardcoded IDs scattered through the old scripts.
+# 10. TRACING — students followed by hand through every stage
 # ===========================================================================
 
+# PROJECT TEAM ACTION: Identify students to trace throughout the pipeine that fit different student profiles:
+##   -  Gen ed student: typical course progression
+##   -  English learner
+##   -  Student with IEP
+##   -  Student in advanced courses (e.g., AP, IB, Cambridge)
+##   -  Student with course failures and/or credit recovery courses
+##   -  Student with work-based learning courses
+##   -  Student with dual enrollment courses
 tracing:
   students:
     - 190137047
@@ -205,81 +394,3 @@ tracing:
     - 190181214
   random_n: 5
   seed: 123
-
-
-# ===========================================================================
-# ===========================================================================
-# NOT USED BY THE TRANSCRIPT PIPELINE
-# Retained from the original file for the master schedule / class size work.
-# Nothing below this line is read by transcript_pipeline.qmd.
-# ===========================================================================
-# ===========================================================================
-
-coding:
-  join_key: [D_course_id, D_course_name]
-  uncoded_flag_threshold_pct: 2
-  max_unique_courses: 5
-
-exclusions:
-  C_course_time_exclude:
-    - { col: C_course_subject_area, op: eq, val: Untracked }
-    - { col: C_course_time_of_day,  op: ne, val: "During school" }
-    - { col: C_course_subject,      op: eq, val: Internship }
-    - { col: C_course_format,       op: eq, val: Virtual }
-  C_class_size_and_teacher_load_exclude:
-    - { col: C_course_subject_area, op: eq, val: Un-prepped }
-    - { col: C_course_subject,      op: in, val: [Maintenance, Internship, Teaching Assistant, Credit Recovery] }
-    - { col: C_course_format,       op: eq, val: Virtual }
-
-class_id:
-  recipe: [D_location_id, D_employee_id, D_term, D_period, D_course_section_id]
-
-time_format: period_rotation
-time_cols:
-  expression:      [D_expression]
-  period_rotation: [D_period, D_rotation]
-
-weights:
-  term:          { Q1: 0.25, Q2: 0.25, Q3: 0.25, Q4: 0.25 }
-  term_interval: { Q1: [0, 0.25], Q2: [0.25, 0.5], Q3: [0.5, 0.75], Q4: [0.75, 1] }
-  term_expands:  { Q1: [Q1], Q2: [Q2], Q3: [Q3], Q4: [Q4] }
-  rotation:
-    default: 1
-    by_school: {}
-  period:
-    default: 1.0
-    by_period: { MISC: 0, CCR: 0 }
-    by_school: {}
-
-bell_minutes:
-  default: 48
-  by_school:
-    "PUTNAM":   { default: 43 }
-    "SCI TECH": { default: 90, overrides: { "8@A": 55, "8@B": 55 } }
-
-db_sizing_filters:
-  - { col: D_period, op: in, val: ["MISC", "CCR"] }
-
-expression:
-  atoms: []
-  expands: {}
-  rotations:
-    A:     ["A"]
-    B:     ["B"]
-    "A-B": ["A", "B"]
-    AB:    ["A", "B"]
-
-db_resolution:
-  student: full
-  teacher: full
-  class:   full
-
-teacher_db:
-  consolidate_max_size: 35
-  exempt_subjects: ["PE/Health", "Art/Music"]
-
-self_contained:
-  swd_ell_threshold_pct: 50
-
-buckets:
-  class_size: [[0, 6], [7, 12], [13, 18], [19, 24], [25, 30], [31, 35], [36, null]]

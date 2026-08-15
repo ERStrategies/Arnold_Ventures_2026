@@ -23,6 +23,7 @@
 .chk$log       <- NULL
 .chk$stage     <- NA_character_
 .chk$offenders <- list()
+.chk$out_dir   <- NULL
 
 if (!exists("%||%", mode = "function")) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -46,6 +47,18 @@ chk_reset <- function() {
   .chk$offenders <- list()
   .chk$stage     <- NA_character_
   invisible(TRUE)
+}
+
+#' Where failed-check artefacts get written.
+#'
+#' When a check fails mid-render, knitr discards the chunk's output, so
+#' anything chk_stop() printed is lost and all you see is the error. Setting a
+#' directory means the offending rows and the log-so-far are written to disk
+#' before the run halts, and the error message names the file.
+chk_set_output_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE)
+  .chk$out_dir <- path
+  invisible(path)
 }
 
 #' Label the stage that subsequent checks belong to.
@@ -133,7 +146,38 @@ chk_stop <- function(check, condition, value = NULL, detail = NULL,
   cat("\n--- Check log up to this point ---\n")
   print(as.data.frame(.chk$log[, c("seq", "stage", "check", "result", "value")]))
 
-  stop("Structural check failed: ", check, call. = FALSE)
+  # Persist the evidence. knitr throws away chunk output when a chunk errors,
+  # so without this the only thing that survives the render is the error line.
+  written <- NULL
+  if (!is.null(.chk$out_dir)) {
+    stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    slug  <- tolower(gsub("[^A-Za-z0-9]+", "_", check))
+    slug  <- substr(gsub("^_|_$", "", slug), 1, 60)
+    try({
+      utils::write.csv(as.data.frame(.chk$log),
+                       file.path(.chk$out_dir, paste0(stamp, "__check_log.csv")),
+                       row.names = FALSE)
+      if (!is.null(offenders)) {
+        written <- file.path(.chk$out_dir, paste0(stamp, "__", slug, ".csv"))
+        utils::write.csv(as.data.frame(offenders), written, row.names = FALSE)
+      }
+    }, silent = TRUE)
+  }
+
+  # Fold the diagnosis into the error itself, so it is visible even when the
+  # chunk output is discarded and no file could be written.
+  preview <- ""
+  if (!is.null(offenders) && nrow(offenders) > 0) {
+    pv <- utils::capture.output(print(utils::head(as.data.frame(offenders), 8)))
+    preview <- paste0("\n", paste(pv, collapse = "\n"))
+  }
+
+  stop("Structural check failed: ", check,
+       if (!is.null(detail)) paste0("\n  ", .chk_fmt(detail)) else "",
+       preview,
+       if (!is.null(written)) paste0("\n\n  Offenders written to: ", written) else "",
+       "\n  In an interactive session: chk_offenders(\"", check, "\")",
+       call. = FALSE)
 }
 
 #' A number or table to eyeball. Never halts.
@@ -240,7 +284,7 @@ chk_n_distinct <- function(data, col, check = NULL) {
 
 #' Print the run summary. Call at the end of the pipeline.
 #' Returns the log invisibly so it can be written to disk or knitted.
-chk_report <- function() {
+chk_report <- function(print_table = TRUE) {
   log <- .chk$log
   if (is.null(log) || nrow(log) == 0) {
     cat("No checks recorded.\n")
@@ -259,6 +303,8 @@ chk_report <- function() {
   cat("  Stages            : ", dplyr::n_distinct(log$stage), "\n", sep = "")
   cat(strrep("=", 70), "\n\n", sep = "")
 
-  print(as.data.frame(log[, c("seq", "stage", "check", "severity", "result", "value")]))
+  if (print_table) {
+    print(as.data.frame(log[, c("seq", "stage", "check", "severity", "result", "value")]))
+  }
   invisible(log)
 }

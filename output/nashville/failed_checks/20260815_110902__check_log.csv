@@ -1,0 +1,73 @@
+"seq","stage","check","severity","result","value","detail","time"
+1,"Stage 0 — Setup","Run stamped","info","INFO","6bd0c435",NA,2026-08-15 11:08:47.187427
+2,"Stage 0 — Setup","Cohort entry","info","INFO","grade 9 in 2022",NA,2026-08-15 11:08:47.234493
+3,"Stage 0 — Setup","Years required","info","INFO","4",NA,2026-08-15 11:08:47.236738
+4,"Stage 0 — Setup","Duration rule","info","INFO","all_years, >= 200 days/yr",NA,2026-08-15 11:08:47.238754
+5,"Stage 0 — Setup","Progression rule","info","INFO","all_years",NA,2026-08-15 11:08:47.240568
+6,"Stage 0 — Setup","Days enrolled rule","info","INFO","sum_of_spells",NA,2026-08-15 11:08:47.242684
+7,"Stage 0 — Setup","Negative days treatment","info","INFO","floor_zero",NA,2026-08-15 11:08:47.244547
+8,"Stage 0 — Setup","Schools in scope","info","INFO","12",NA,2026-08-15 11:08:47.246322
+9,"Stage 1 — Load sources","Source loaded: transcript_raw","info","INFO","1,501,192 rows x 9 cols","from cache, written 2026-08-15 10:11",2026-08-15 11:08:48.11465
+10,"Stage 1 — Load sources","Source loaded: stu_demographics","info","INFO","119,308 rows x 11 cols","from cache, written 2026-08-15 10:11",2026-08-15 11:08:48.216091
+11,"Stage 1 — Load sources","Source loaded: course_coding","info","INFO","4,702 rows x 22 cols","from cache, written 2026-08-15 10:25",2026-08-15 11:08:48.230043
+12,"Stage 1 — Load sources","Transcript has expected columns","stop","PASS",NA,"Missing: ",2026-08-15 11:08:48.284519
+13,"Stage 1 — Load sources","Demographics has expected columns","stop","PASS",NA,"Missing: ",2026-08-15 11:08:48.286759
+14,"Stage 1 — Load sources","Transcript rows","info","INFO","1,501,192",NA,2026-08-15 11:08:48.288699
+15,"Stage 1 — Load sources","Demographics rows","info","INFO","119,308",NA,2026-08-15 11:08:48.290667
+16,"Stage 2 — Student cleaning","Rename produced all standard columns","stop","PASS","11 columns",NA,2026-08-15 11:08:48.320197
+17,"Stage 2 — Student cleaning","Student id and year always present","stop","PASS",NA,NA,2026-08-15 11:08:48.330293
+18,"Stage 2 — Student cleaning","Distinct students in raw demographics","info","INFO","51,238",NA,2026-08-15 11:08:48.333958
+19,"Stage 2 — Student cleaning","Dates parse: enter date","stop","PASS","119,308 parsed",NA,2026-08-15 11:08:48.83051
+20,"Stage 2 — Student cleaning","Dates parse: exit date","stop","PASS","29,192 parsed",NA,2026-08-15 11:08:48.948632
+21,"Stage 2 — Student cleaning","Dates missing: exit date","info","INFO","75.5% (90,116 rows)",NA,2026-08-15 11:08:48.951248
+22,"Stage 2 — Student cleaning","Dates filled from fallback: exit date -> year end","info","INFO","90,116 (75.5%)",NA,2026-08-15 11:08:50.105462
+23,"Stage 2 — Student cleaning","Both dates present after fill","stop","PASS",NA,NA,2026-08-15 11:08:50.123762
+24,"Stage 2 — Student cleaning","Exit date is not before enter date","stop","PASS",NA,NA,2026-08-15 11:08:50.127064
+25,"Stage 2 — Student cleaning","Spells clamped at the start of the window","info","INFO","23,408",NA,2026-08-15 11:08:53.072301
+26,"Stage 2 — Student cleaning","Spells clamped at the end of the window","info","INFO","0",NA,2026-08-15 11:08:53.083487
+27,"Stage 2 — Student cleaning","Spells entirely outside the school year","info","INFO","188",NA,2026-08-15 11:08:53.125891
+28,"Stage 2 — Student cleaning","Negative-duration spells floored to zero","info","INFO","188",NA,2026-08-15 11:08:53.220527
+29,"Stage 2 — Student cleaning","Out-of-range: M_days_enrolled","info","INFO","0 row(s), 0%","allowed [0, 366]",2026-08-15 11:08:53.247389
+30,"Stage 2 — Student cleaning","Out-of-range within tolerance: M_days_enrolled","stop","PASS","0%","tolerance is 1%",2026-08-15 11:08:53.24955
+31,"Stage 2 — Student cleaning","Days enrolled is never NA","stop","PASS",NA,NA,2026-08-15 11:08:53.258003
+32,"Stage 2 — Student cleaning","Credit recovery site rows","info","INFO","8",NA,2026-08-15 11:08:53.604511
+33,"Stage 2 — Student cleaning","Merge target resolves to one location code: James Lawson High","stop","PASS","445",NA,2026-08-15 11:08:53.637115
+34,"Stage 2 — Student cleaning","Absorbed location exists: Hillwood High","stop","PASS",NA,"name not found in the data; check spelling against the crosswalk",2026-08-15 11:08:53.639043
+35,"Stage 2 — Student cleaning","Merged locations do not overlap in time: Hillwood High -> James Lawson High","stop","PASS","Hillwood High: 2022, 2023 | James Lawson High: 2024, 2025",NA,2026-08-15 11:08:53.641601
+36,"Stage 2 — Student cleaning","Location merges applied","info","INFO","2,692 row(s) remapped","1",2026-08-15 11:08:53.646138
+37,"Stage 2 — Student cleaning","Location crosswalk built","info","INFO","38 code(s), 52 cleaned name(s)",NA,2026-08-15 11:08:53.68612
+38,"Stage 2 — Student cleaning","Location codes mapping to more than one cleaned name","info","INFO","9",NA,2026-08-15 11:08:53.702306
+39,"Stage 2 — Student cleaning","Every school in schools_to_include exists in the data","stop","PASS","12 of 12 resolved",NA,2026-08-15 11:08:53.708992
+40,"Stage 2 — Student cleaning","Location names normalised to canonical","info","INFO","1,104 row(s) renamed","38 code(s) each given one display name",2026-08-15 11:08:53.886255
+41,"Stage 2 — Student cleaning","Credit recovery rows resolve to a parent school","stop","PASS","8 row(s)",NA,2026-08-15 11:08:53.915076
+42,"Stage 2 — Student cleaning","Rows at in-scope schools","info","INFO","80,205 of 119,308 (67.2%)",NA,2026-08-15 11:08:53.917365
+43,"Stage 2 — Student cleaning","School presence by year","info","INFO","12 in-scope location(s)",NA,2026-08-15 11:08:54.168403
+44,"Stage 2 — Student cleaning","No undeclared school-year gaps","stop","PASS","12 school(s) x 4 year(s)",NA,2026-08-15 11:08:54.181803
+45,"Stage 2 — Student cleaning","Value map covers all codes: D_stu_race","stop","PASS","6 distinct code(s)",NA,2026-08-15 11:08:54.221761
+46,"Stage 2 — Student cleaning","C_stu_ell_flag is 0/1","stop","PASS","2 distinct value(s)",NA,2026-08-15 11:08:54.232081
+47,"Stage 2 — Student cleaning","C_stu_swd_flag is 0/1","stop","PASS","2 distinct value(s)",NA,2026-08-15 11:08:54.242869
+48,"Stage 2 — Student cleaning","C_stu_poverty_flag is 0/1","stop","PASS","2 distinct value(s)",NA,2026-08-15 11:08:54.245918
+49,"Stage 2 — Student cleaning","Scope — drop null D_stu_id","info","INFO","0 row(s) dropped",NA,2026-08-15 11:08:54.379188
+50,"Stage 2 — Student cleaning","Scope — drop null D_year","info","INFO","0 row(s) dropped",NA,2026-08-15 11:08:54.438012
+51,"Stage 2 — Student cleaning","Scope — drop null D_location_id","info","INFO","0 row(s) dropped",NA,2026-08-15 11:08:54.486754
+52,"Stage 2 — Student cleaning","Scope — filter D_stu_grade_level_demo >= 9","info","INFO","0 row(s) dropped",NA,2026-08-15 11:08:54.498398
+53,"Stage 2 — Student cleaning","Scope — total retained","info","INFO","119,308 of 119,308 rows (100%)",NA,2026-08-15 11:08:54.50013
+54,"Stage 2 — Student cleaning","Scope — distinct ids retained","info","INFO","51,238 of 51,238",NA,2026-08-15 11:08:54.503046
+55,"Stage 2 — Student cleaning","One row per student / year / school / entry date","stop","PASS","119308 rows",NA,2026-08-15 11:08:55.214017
+56,"Stage 2 — Student cleaning","Repeat spells at the same school","info","INFO","697",NA,2026-08-15 11:08:56.060882
+57,"Stage 2 — Student cleaning","No same-school spells overlap in time","stop","PASS",NA,"sum_of_spells would double-count if any overlapped",2026-08-15 11:08:56.062784
+58,"Stage 2 — Student cleaning","Stage 2 output rows","info","INFO","119,308",NA,2026-08-15 11:08:56.065056
+59,"Stage 3 — Transcript cleaning","Rename produced all standard columns","stop","PASS","10 columns",NA,2026-08-15 11:08:56.134932
+60,"Stage 3 — Transcript cleaning","Every school year spans exactly one year","stop","PASS",NA,NA,2026-08-15 11:08:56.143337
+61,"Stage 3 — Transcript cleaning","Transcript years match demographics years","stop","PASS","2022, 2023, 2024, 2025","demographics: 2022, 2023, 2024, 2025",2026-08-15 11:08:56.176202
+62,"Stage 3 — Transcript cleaning","Student id and year always present","stop","PASS",NA,NA,2026-08-15 11:08:56.204025
+63,"Stage 3 — Transcript cleaning","Rows with no course ID","info","INFO","1","dropped by scope in 3.5",2026-08-15 11:08:56.209173
+64,"Stage 3 — Transcript cleaning","Derived C_term","info","INFO","100% resolved",NA,2026-08-15 11:08:56.882686
+65,"Stage 3 — Transcript cleaning","Rows with no term detected","info","INFO","749",NA,2026-08-15 11:08:56.962527
+66,"Stage 3 — Transcript cleaning","Distinct course IDs (as given)","info","INFO","2,709",NA,2026-08-15 11:08:58.843374
+67,"Stage 3 — Transcript cleaning","Distinct course IDs (base)","info","INFO","1,582",NA,2026-08-15 11:08:58.963448
+68,"Stage 3 — Transcript cleaning","Distinct course names","info","INFO","4,344",NA,2026-08-15 11:08:58.979137
+69,"Stage 3 — Transcript cleaning","Course names containing an asterisk","info","INFO","46,780",NA,2026-08-15 11:08:58.982414
+70,"Stage 3 — Transcript cleaning","Distinct course ID + name pairs","info","INFO","4,808","this is the Stage 7 join key",2026-08-15 11:08:59.008717
+71,"Stage 3 — Transcript cleaning","Out-of-range: D_stu_grade","info","INFO","35,629 row(s), 2.373%","allowed [0, 100]",2026-08-15 11:09:02.136888
+72,"Stage 3 — Transcript cleaning","Out-of-range within tolerance: D_stu_grade","stop","FAIL","2.373%","tolerance is 0.5%",2026-08-15 11:09:02.139881

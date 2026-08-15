@@ -4,8 +4,8 @@ subtitle: "Metro Nashville Public Schools"
 date: today
 params:
   district: "nashville"
-  refresh_raw: false      # TRUE re-reads every source from SharePoint
-  smoke_test: true        # TRUE runs the check-framework self-test in Stage 0
+  refresh_raw: false
+  smoke_test: false
 format:
   html:
     toc: true
@@ -22,60 +22,55 @@ editor: source
 ```{r setup}
 #| include: false
 knitr::opts_chunk$set(echo = TRUE)
-source(here::here("R", "setup.R"))
+source(here::here("templates", "transcript", "00_tr_setup.R"))
 ```
 
 # What this file is
 
 One document, run top to bottom, replacing the eight scripts that used to run
-in sequence. Everything district-specific lives either here or in
-`config/districts/tr_nashville.yaml`. Everything reusable lives in `R/`.
+in sequence. District-specific cleaning decisions live here or in
+`config/districts/tr_nashville.yaml`. Reusable machinery lives in
+`templates/transcript/00_tr_*.R`.
 
 **Reading the output.** Every check prints as it runs:
 
 - `[PASS]` — a structural check held.
-- `[FAIL]` — a structural check broke. The render stops here. Offending rows
-  are printed, and available afterwards via `chk_offenders("<check name>")`.
-- `[info]` — a count or table to eyeball. Never halts anything.
+- `[FAIL]` — a structural check broke. The render stops. Offending rows print,
+  and stay available via `chk_offenders("<check name>")`.
+- `[info]` — a count or table to eyeball. Never halts.
 
-The last section prints a summary table of every check in the run.
-
-**Stages.**
-
-| # | Stage | Replaces |
-|---|-------|----------|
-| 0 | Setup and config | Part 0 of all eight scripts |
-| 1 | Load sources | Part 1 of all eight scripts |
-| 2 | Student cleaning | `01_raw_data_student_validation` |
-| 3 | Transcript cleaning | `01_raw_data_transcript_validation` |
-| 4 | Cross-file reconciliation | `02_cross_file_validation` §2.1 |
-| 5 | Home school assignment | `02_cross_file_validation` §2.2 |
-| 6 | Cohort selection | `03_student_cohort_selection` |
-| 7 | Course coding join | new — the rollup that never existed |
-| 8 | Output and check report | Part 3/4 of all eight scripts |
+| # | Stage | Replaces | Status |
+|---|-------|----------|--------|
+| 0 | Setup and config | Part 0 of all eight | built |
+| 1 | Load sources | Part 1 of all eight | built |
+| 2 | Student cleaning | `01_raw_data_student_validation` | built |
+| 3 | Transcript cleaning | `01_raw_data_transcript_validation` | built |
+| 4 | Cross-file reconciliation | `02_cross_file_validation` §2.1 | next |
+| 5 | Home school assignment | `02_cross_file_validation` §2.2 | |
+| 6 | Cohort selection | `03_student_cohort_selection` | |
+| 7 | Course coding join | new — the rollup that never existed | |
+| 8 | Output and check report | Part 3/4 of all eight | partial |
 
 ---
 
 # Stage 0 — Setup and configuration
-
-## 0.1 Load and validate the config
-
-`load_config()` fails on the spot, listing every problem at once, if the YAML
-is missing anything the pipeline depends on. Better than discovering a missing
-column map at Stage 4.
 
 ```{r config}
 chk_reset()
 chk_stage("Stage 0 — Setup")
 
 config <- load_config(district = params$district)
+
+# Failed checks write their offending rows here before the run halts, because
+# knitr discards a chunk's output when the chunk errors.
+chk_set_output_dir(file.path(
+  config$paths$output_dir %||% here::here("output", tolower(params$district)),
+  "failed_checks"))
+
 config_summary(config)
 ```
 
-## 0.2 Record the run
-
-Stamped so any number produced here can be traced back to the exact config and
-code that made it.
+## 0.1 Run manifest
 
 ```{r run-manifest}
 run_manifest <- tibble::tibble(
@@ -87,18 +82,11 @@ run_manifest <- tibble::tibble(
   r_version   = paste0(R.version$major, ".", R.version$minor),
   user        = Sys.info()[["user"]]
 )
-
-chk_info("Run stamped", run_manifest$config_md5,
-         detail = paste("config", run_manifest$config_file))
-
+chk_info("Run stamped", run_manifest$config_md5)
 run_manifest
 ```
 
-## 0.3 Config decisions worth seeing in the report
-
-These were hardcoded in the old scripts, in more than one place, and in one
-case inconsistently. Printing them here means a reviewer can see the cohort
-definition without reading any code.
+## 0.2 The decisions this run is making
 
 ```{r config-decisions}
 chk_info("Cohort entry", paste0("grade ", config$cohort$entry_grade,
@@ -108,54 +96,21 @@ chk_info("Duration rule", paste0(config$cohort$duration_rule, ", >= ",
                                  config$cohort$duration_min_days, " days/yr"))
 chk_info("Progression rule", config$cohort$progression_rule)
 chk_info("Days enrolled rule", config$cohort$days_enrolled_rule)
-chk_info("Schools in scope", length(config$cohort$schools_to_include),
-         data = tibble::tibble(school = config$cohort$schools_to_include))
-
-tibble::tibble(
-  alias     = names(config$cohort$school_name_aliases),
-  resolves_to = unlist(config$cohort$school_name_aliases)
-)
+chk_info("Negative days treatment", config$derived$negative_days_treatment)
+chk_info("Schools in scope", length(config$cohort$schools_to_include))
 ```
 
-## 0.4 Check-framework self-test
-
-Runs against fabricated data, touches nothing real. Confirms `[PASS]`,
-`[info]`, and `[FAIL]` all behave before any district data is involved. Set
-`smoke_test: false` in the header once you trust it.
+## 0.3 Check-framework self-test
 
 ```{r smoke-test}
 #| eval: !expr params$smoke_test
-
-toy <- tibble::tibble(
-  D_stu_id = c(1, 1, 2, 3),
-  D_year   = c(2022, 2023, 2022, 2022),
-  score    = c(10, 20, 30, NA)
-)
-
-# Should PASS
-chk_unique(toy, c("D_stu_id", "D_year"), "Self-test: toy is unique on id + year")
-chk_rows_stable(toy, toy, "Self-test: row count stable")
-chk_n_distinct(toy, "D_stu_id", "Self-test: distinct students")
-
-# Should print an info table
-chk_info("Self-test: rows by year",
-         dplyr::n_distinct(toy$D_year),
-         data = dplyr::count(toy, D_year))
-
-# Should FAIL — wrapped so the render survives the demonstration
+toy <- tibble::tibble(D_stu_id = c(1, 1, 2, 3),
+                      D_year   = c(2022, 2023, 2022, 2022),
+                      score    = c(10, 20, 30, NA))
+chk_unique(toy, c("D_stu_id", "D_year"), "Self-test: unique on id + year")
 demo <- try(chk_no_na(toy, "score", "Self-test: deliberate failure"), silent = TRUE)
-cat("\nFailure was caught. Offending rows retained:\n")
 print(chk_offenders("Self-test: deliberate failure"))
-```
-
-## 0.5 Reset after the self-test
-
-Clears the toy checks so the report only contains real ones.
-
-```{r post-smoke-reset}
-#| eval: !expr params$smoke_test
-chk_reset()
-chk_stage("Stage 0 — Setup")
+chk_reset(); chk_stage("Stage 0 — Setup")
 chk_info("Self-test complete", "framework verified, log reset")
 ```
 
@@ -163,64 +118,981 @@ chk_info("Self-test complete", "framework verified, log reset")
 
 # Stage 1 — Load sources
 
-> Not built yet. Next step.
-
-Reads the transcript, demographics, and coded course file once each, caching
-them locally as `.rds`. Re-runs read from cache in under a second. Set
-`refresh_raw: true` in the header when the district sends new data.
+Each file is read from SharePoint once and cached as `.rds`. **The cache does
+not know when the district re-sends a file.** Set `refresh_raw: true` when new
+data lands.
 
 ```{r load-sources}
-#| eval: false
 chk_stage("Stage 1 — Load sources")
 
-transcript_raw <- read_source("transcript_raw",   config, refresh = params$refresh_raw)
+transcript_raw   <- read_source("transcript_raw",   config, refresh = params$refresh_raw)
 demographics_raw <- read_source("stu_demographics", config, refresh = params$refresh_raw)
-course_coding_raw <- read_source("course_coding",  config, refresh = params$refresh_raw,
-                                 sheet = config$sheets$course_coding)
+
+course_coding_raw <- tryCatch(
+  read_source("course_coding", config, refresh = params$refresh_raw,
+              sheet = config$sheets$course_coding),
+  error = function(e) {
+    chk_info("Course coding file NOT loaded", "see detail", detail = conditionMessage(e))
+    NULL
+  }
+)
+```
+
+## 1.1 Expected shape
+
+```{r source-shape}
+chk_stop("Transcript has expected columns",
+         all(unlist(config$column_map$transcript) %in% names(transcript_raw)),
+         detail = paste("Missing:", paste(
+           setdiff(unlist(config$column_map$transcript), names(transcript_raw)),
+           collapse = ", ")))
+
+chk_stop("Demographics has expected columns",
+         all(unlist(config$column_map$demographics) %in% names(demographics_raw)),
+         detail = paste("Missing:", paste(
+           setdiff(unlist(config$column_map$demographics), names(demographics_raw)),
+           collapse = ", ")))
+
+chk_info("Transcript rows",   nrow(transcript_raw))
+chk_info("Demographics rows", nrow(demographics_raw))
 ```
 
 ---
 
 # Stage 2 — Student cleaning
 
-> Not built yet.
+Ends at one row per student per enrolment spell. Collapsing to one row per
+student-year happens at Stage 5, after home school is assigned.
+
+## 2.1 Rename to ERS standard names
+
+```{r stu-rename}
+chk_stage("Stage 2 — Student cleaning")
+
+stu <- demographics_raw |>
+  dplyr::rename(dplyr::any_of(unlist(config$column_map$demographics))) |>
+  dplyr::rename(!!config$grade_level_names$demographics := D_stu_grade_level)
+
+chk_stop("Rename produced all standard columns",
+         all(setdiff(names(config$column_map$demographics), "D_stu_grade_level")
+             %in% names(stu)),
+         value = paste0(ncol(stu), " columns"))
+
+chk_no_na(stu, c("D_stu_id", "D_year"), "Student id and year always present")
+chk_info("Distinct students in raw demographics", dplyr::n_distinct(stu$D_stu_id))
+```
+
+## 2.2 Dates
+
+Where the old pipeline broke. `wdt` arrives as `m/d/yyyy`; the original asked
+`as.Date()` for `%Y-%m-%d`, which returns `NA` silently, so every exit date and
+therefore every duration was `NA`. Formats now come from config, unparseable
+values are a structural failure, and the fill uses `coalesce()` rather than
+`ifelse()` so the Date class survives.
+
+```{r stu-dates}
+stu <- stu |>
+  dplyr::mutate(
+    D_stu_enter_date = parse_date_strict(D_stu_enter_date,
+                                         config$derived$date_formats$D_stu_enter_date,
+                                         "enter date"),
+    D_stu_exit_date  = parse_date_strict(D_stu_exit_date,
+                                         config$derived$date_formats$D_stu_exit_date,
+                                         "exit date"),
+    C_exit_date_imputed = is.na(D_stu_exit_date)
+  )
+
+if (isTRUE(config$derived$force_missing_exit_date)) {
+  stu <- stu |>
+    dplyr::mutate(D_stu_exit_date = fill_missing_date(
+      D_stu_exit_date,
+      as.Date(paste0(D_year, "-", config$derived$school_year_end_mmdd)),
+      label = "exit date -> year end"))
+}
+
+chk_no_na(stu, c("D_stu_enter_date", "D_stu_exit_date"), "Both dates present after fill")
+
+chk_stop("Exit date is not before enter date",
+         all(stu$D_stu_exit_date >= stu$D_stu_enter_date),
+         offenders = stu |>
+           dplyr::filter(D_stu_exit_date < D_stu_enter_date) |>
+           dplyr::select(D_year, D_location_id, D_stu_enter_date, D_stu_exit_date))
+```
+
+`wdt` behaves like a withdrawal date, not a year-end date: spells that carry a
+real one have a median of about five weeks. That means the duration threshold
+is doing less work than it looks — it is close to separating "withdrew" from
+"did not."
+
+## 2.3 Days enrolled
+
+Spells are clamped to the school year so an entry date carried over from a
+prior year cannot produce a 1,200-day "year".
+
+```{r stu-days}
+stu <- stu |>
+  dplyr::mutate(
+    H_year_start = as.Date(paste0(D_year - 1, "-", config$derived$school_year_start_mmdd)),
+    H_year_end   = as.Date(paste0(D_year,     "-", config$derived$school_year_end_mmdd)),
+    C_spell_before_window = D_stu_exit_date  < H_year_start,
+    C_spell_after_window  = D_stu_enter_date > H_year_end,
+    H_enter_clamped = if (isTRUE(config$derived$clamp_days_to_school_year))
+      pmax(D_stu_enter_date, H_year_start) else D_stu_enter_date,
+    H_exit_clamped  = if (isTRUE(config$derived$clamp_days_to_school_year))
+      pmin(D_stu_exit_date,  H_year_end)   else D_stu_exit_date,
+    M_days_enrolled = as.numeric(H_exit_clamped - H_enter_clamped)
+  )
+
+chk_info("Spells clamped at the start of the window",
+         sum(stu$D_stu_enter_date < stu$H_year_start))
+chk_info("Spells clamped at the end of the window",
+         sum(stu$D_stu_exit_date > stu$H_year_end))
+```
+
+### Spells that fall outside the school year
+
+These are what produced negative durations on the first run. Entry dates in
+early July, recorded against the year that had just ended.
+
+```{r stu-outside-window}
+outside <- stu |>
+  dplyr::filter(C_spell_before_window | C_spell_after_window) |>
+  dplyr::select(D_year, D_location_id, D_stu_enter_date, D_stu_exit_date,
+                C_exit_date_imputed, C_spell_before_window, C_spell_after_window,
+                M_days_enrolled)
+
+chk_info("Spells entirely outside the school year", nrow(outside),
+         data = outside |>
+           dplyr::count(D_year, C_spell_before_window, C_spell_after_window,
+                        name = "n_rows"))
+
+outside |> dplyr::arrange(M_days_enrolled) |> utils::head(20)
+```
+
+```{r stu-negative-treatment}
+treatment <- config$derived$negative_days_treatment
+
+if (treatment == "drop") {
+  before <- nrow(stu)
+  stu <- stu |> dplyr::filter(M_days_enrolled >= 0)
+  chk_info("Negative-duration spells dropped", before - nrow(stu))
+} else if (treatment == "floor_zero") {
+  n_floored <- sum(stu$M_days_enrolled < 0)
+  stu <- stu |> dplyr::mutate(M_days_enrolled = pmax(M_days_enrolled, 0))
+  chk_info("Negative-duration spells floored to zero", n_floored)
+} else {
+  chk_info("Negative-duration spells left as-is", sum(stu$M_days_enrolled < 0))
+}
+
+guard <- range_two_tier(stu$M_days_enrolled, config$ranges$M_days_enrolled,
+                        "M_days_enrolled")
+stu$M_days_enrolled <- guard$values
+
+chk_stop("Days enrolled is never NA", !any(is.na(stu$M_days_enrolled)))
+```
+
+```{r stu-days-by-imputation}
+stu |>
+  dplyr::group_by(C_exit_date_imputed) |>
+  dplyr::summarise(
+    n_rows       = dplyr::n(),
+    median_days  = stats::median(M_days_enrolled),
+    pct_over_thr = round(100 * mean(M_days_enrolled >= config$cohort$duration_min_days), 1),
+    .groups = "drop")
+```
+
+The threshold counts **calendar** days, not instructional ones. A typical year
+has about 180 instructional days, so "200 instructional days" could never be
+met by anyone — 200 can only mean calendar days.
+
+What it actually means here: for the 75.5% of rows whose exit date is imputed
+to 30 June, `M_days_enrolled` is simply `30 June - entry date`, and 30 June
+minus 200 days is exactly **12 December**. So for three quarters of the file
+the rule reads "enrolled on or before 12 December". For the rest, which carry a
+real withdrawal date at a median of about five weeks, almost none clear it.
+
+Worth writing up that way rather than as "enrolled 200 days", which implies a
+measure of attendance this data cannot support. A genuine instructional-day
+threshold would need a district school-calendar table.
+
+## 2.4 Locations
+
+Names carry a year stamp, are truncated at ~24 characters, and change spelling
+between years. Codes are stable, so names resolve to codes once and everything
+downstream matches on the code.
+
+```{r stu-locations}
+stu <- stu |>
+  dplyr::mutate(
+    C_location_name = clean_location_name(
+      D_location_name,
+      strip_prefix = config$derived$location_name_strip_prefix,
+      strip_suffix = config$derived$location_name_strip_suffix,
+      aliases      = config$cohort$school_name_aliases),
+    C_credit_recovery_site = grepl(config$cohort$credit_recovery_name_pattern,
+                                   D_location_name)
+  )
+
+chk_info("Credit recovery site rows", sum(stu$C_credit_recovery_site))
+
+stu <- apply_location_merges(stu,
+  id_col = "D_location_id", name_col = "C_location_name",
+  year_col = "D_year", merges = config$cohort$location_merges)
+
+location_xwalk <- build_location_crosswalk(
+  stu, "C_location_id", "C_location_name_merged",
+  include = config$cohort$schools_to_include)
+
+included_location_ids <- attr(location_xwalk, "included_ids")
+```
+
+Hillwood and James Lawson are one institution across time, not two schools.
+MNPS relocated the whole campus — all non-graduating students and the teaching
+staff moved from the Hillwood building to the new Bellevue facility for August
+2023 — so a student appearing at both is continuous enrolment, not a transfer.
+`location_merges` remaps Hillwood's code onto James Lawson's, leaving the raw
+`D_location_id` untouched and putting the merged code in `C_location_id`.
+
+The merge is verified rather than trusted: each name must resolve to exactly
+one code, and the two must not operate in the same year. Concurrent operation
+would mean two schools rather than one relocation, and the run would stop.
+
+Credit-recovery sites already carry the **parent school's** code — `S2022 CR
+Cane Ridge HS` is code 182, the same as Cane Ridge High School — so matching on
+the code rolls them up with no extra work. Only the display name needed fixing,
+which is what canonical naming does. The flag is kept so they stay findable.
+
+```{r stu-canonical-names}
+stu <- resolve_canonical_names(stu, "C_location_id", "C_location_name_merged")
+
+stu <- stu |>
+  dplyr::mutate(C_school_in_scope = C_location_id %in% included_location_ids)
+
+chk_stop("Credit recovery rows resolve to a parent school",
+         all(stu$C_location_name_canonical[stu$C_credit_recovery_site] !=
+             stu$C_location_name[stu$C_credit_recovery_site]),
+         value = paste0(sum(stu$C_credit_recovery_site), " row(s)"),
+         offenders = stu |>
+           dplyr::filter(C_credit_recovery_site) |>
+           dplyr::distinct(C_location_id, C_location_name, C_location_name_canonical))
+
+chk_info("Rows at in-scope schools",
+         paste0(format(sum(stu$C_school_in_scope), big.mark = ","), " of ",
+                format(nrow(stu), big.mark = ","), " (",
+                round(100 * mean(stu$C_school_in_scope), 1), "%)"))
+
+stu |>
+  dplyr::filter(C_credit_recovery_site) |>
+  dplyr::count(C_location_id, C_location_name, C_location_name_canonical,
+               C_school_in_scope, name = "n_rows")
+```
+
+```{r stu-inscope-table}
+stu |>
+  dplyr::filter(C_school_in_scope) |>
+  dplyr::count(C_location_id, C_location_name_canonical, name = "n_rows") |>
+  dplyr::arrange(C_location_name_canonical)
+```
+
+### Which schools exist in which years
+
+Schools open and close. An in-scope school missing from a year is either a data
+problem or a fact about the district, and nothing in the data distinguishes
+them — so the exceptions are declared in config, with a reason that prints
+here. An undeclared gap stops the run.
+
+Because Hillwood merges into James Lawson, the merged location is expected in
+every year and needs no exception. The override mechanism stays available for
+districts where a school genuinely opens or closes without a successor.
+
+```{r stu-school-years}
+school_presence <- check_school_year_coverage(
+  stu, id_col = "C_location_id", name_col = "C_location_name_canonical",
+  year_col = "D_year", include_ids = included_location_ids,
+  expectations = config$cohort$school_year_expectations)
+
+school_presence
+```
+
+James Lawson should now show enrolment in all four years — 2022 and 2023 from
+the Hillwood building, 2024 and 2025 from Bellevue — so no override is needed.
+
+## 2.5 Demographics recode
+
+Flags stay as 0/1 integers. Race goes through a map that stops on any code the
+config does not cover.
+
+```{r stu-recode}
+stu <- stu |>
+  dplyr::mutate(C_stu_race = apply_value_map(D_stu_race, config$value_maps$D_stu_race,
+                                             "D_stu_race")) |>
+  dplyr::rename(C_stu_ell_flag     = D_stu_ell,
+                C_stu_swd_flag     = D_stu_swd,
+                C_stu_poverty_flag = D_stu_frl)
+
+for (f in c("C_stu_ell_flag", "C_stu_swd_flag", "C_stu_poverty_flag")) {
+  chk_values_in(stu, f, c(0, 1), paste0(f, " is 0/1"))
+}
+
+stu |>
+  dplyr::summarise(rows = dplyr::n(),
+                   pct_ell     = round(100 * mean(C_stu_ell_flag), 1),
+                   pct_swd     = round(100 * mean(C_stu_swd_flag), 1),
+                   pct_poverty = round(100 * mean(C_stu_poverty_flag), 1))
+```
+
+## 2.6 Scope
+
+The original config filtered on `D_stu_grade >= 9`, but `D_stu_grade` maps to
+`percent` — the course grade. That kept anyone scoring above 9%.
+
+```{r stu-scope}
+stu <- apply_scope(stu, config$scope$demographics, id_col = "D_stu_id")
+```
+
+## 2.7 Grain
+
+```{r stu-grain}
+chk_unique(stu, c("D_stu_id", "D_year", "D_location_id", "D_stu_enter_date"),
+           "One row per student / year / school / entry date")
+
+overlaps <- stu |>
+  dplyr::arrange(D_stu_id, D_year, D_location_id, H_enter_clamped) |>
+  dplyr::group_by(D_stu_id, D_year, D_location_id) |>
+  dplyr::filter(dplyr::n() > 1) |>
+  dplyr::mutate(prev_exit = dplyr::lag(H_exit_clamped),
+                overlaps  = !is.na(prev_exit) & H_enter_clamped < prev_exit) |>
+  dplyr::ungroup()
+
+chk_info("Repeat spells at the same school", dplyr::n_distinct(overlaps$D_stu_id))
+chk_stop("No same-school spells overlap in time",
+         sum(overlaps$overlaps, na.rm = TRUE) == 0,
+         detail = "sum_of_spells would double-count if any overlapped",
+         offenders = overlaps |> dplyr::filter(overlaps))
+
+stu_cleaned <- stu
+chk_info("Stage 2 output rows", nrow(stu_cleaned))
+```
+
+## 2.8 Trace students
+
+```{r stu-trace}
+set.seed(config$tracing$seed)
+trace_ids <- unique(c(config$tracing$students,
+                      sample(unique(stu_cleaned$D_stu_id), config$tracing$random_n)))
+
+stu_cleaned |>
+  dplyr::filter(D_stu_id %in% trace_ids) |>
+  dplyr::select(D_stu_id, D_year, C_location_name_canonical,
+                !!rlang::sym(config$grade_level_names$demographics),
+                D_stu_enter_date, D_stu_exit_date, C_exit_date_imputed,
+                M_days_enrolled, C_school_in_scope) |>
+  dplyr::arrange(D_stu_id, D_year)
+```
 
 ---
 
 # Stage 3 — Transcript cleaning
 
-> Not built yet.
+Replaces `01_raw_data_transcript_validation.Rmd`. The dedup sections of that
+script are gone: the file is already perfectly unique on student × year ×
+course, with zero fully duplicated rows.
+
+## 3.1 Rename and derive the year
+
+The transcript has no year column. `D_year` comes from `end_year`, which
+carries the same four values as the demographics `year` — that is what makes
+the Stage 4 join possible. The old `02` script joined on a `D_year` that was
+never created.
+
+```{r tr-rename}
+chk_stage("Stage 3 — Transcript cleaning")
+
+tr <- transcript_raw |>
+  dplyr::rename(dplyr::any_of(unlist(config$column_map$transcript))) |>
+  dplyr::rename(!!config$grade_level_names$transcript := D_stu_grade_level) |>
+  dplyr::mutate(D_year = .data[[config$derived$transcript_year_from]])
+
+chk_stop("Rename produced all standard columns",
+         all(setdiff(names(config$column_map$transcript), "D_stu_grade_level")
+             %in% names(tr)),
+         value = paste0(ncol(tr), " columns"))
+
+# Only meaningful where the district supplies both a start and an end year.
+if (all(c("D_start_year", "D_end_year") %in% names(tr))) {
+  chk_stop("Every school year spans exactly one year",
+           all(tr$D_end_year - tr$D_start_year == 1),
+           offenders = tr |>
+             dplyr::filter(D_end_year - D_start_year != 1) |>
+             dplyr::count(D_start_year, D_end_year, name = "n_rows"))
+} else {
+  chk_info("Start/end year check skipped", "district supplies only one year column")
+}
+
+chk_stop("Transcript years match demographics years",
+         setequal(unique(tr$D_year), unique(stu_cleaned$D_year)),
+         value  = paste(sort(unique(tr$D_year)), collapse = ", "),
+         detail = paste("demographics:", paste(sort(unique(stu_cleaned$D_year)), collapse = ", ")))
+
+# Assert only what is required unconditionally. D_course_id nullity is handled
+# by scope below, which is configured to drop those rows — asserting it here
+# halted the run on a row the pipeline was about to discard anyway.
+chk_no_na(tr, c("D_stu_id", "D_year"), "Student id and year always present")
+
+chk_info("Rows with no course ID", sum(is.na(tr$D_course_id)),
+         detail = "dropped by scope in 3.5",
+         data = tr |> dplyr::filter(is.na(D_course_id)) |>
+           dplyr::select(D_stu_id, D_year, D_course_name,
+                         D_creds_earn, D_creds_possible))
+```
+
+## 3.2 Term
+
+Derived, since there is no term column. The S1/S2 marker sits on the course
+number for most rows and on the course name as a fallback.
+
+```{r tr-term}
+tr <- tr |>
+  dplyr::mutate(C_term = match_first_pattern(
+    sources = list(D_course_id   = D_course_id,
+                   D_course_name = D_course_name),
+    rules   = config$derived$term_detection$rules,
+    label   = "C_term"))
+
+chk_info("Rows with no term detected", sum(is.na(tr$C_term)),
+         data = tr |> dplyr::filter(is.na(C_term)) |>
+           dplyr::count(D_course_id, D_course_name,
+                        D_creds_possible, D_creds_earn, name = "n_rows") |>
+           dplyr::arrange(dplyr::desc(n_rows)))
+```
+
+```{r tr-noterm-credits}
+tr |>
+  dplyr::filter(is.na(C_term)) |>
+  dplyr::count(D_creds_possible, D_creds_earn, name = "n_rows") |>
+  dplyr::mutate(pct = round(100 * n_rows / sum(n_rows), 1)) |>
+  dplyr::arrange(dplyr::desc(n_rows))
+```
+
+### 3.2a Are DA/DB terms, or sections?
+
+Every no-term row is a dual-enrolment course, and their IDs come in pairs —
+`SST5601DA` and `SST5601DB`, `HLT3801DA` and `HLT3801DB`. That could be a
+semester marker in a different dialect, or it could be section A and section B.
+
+The two readings make opposite predictions. If DA/DB are **terms**, a large
+share of students take both halves of the same base course in one year. If they
+are **sections**, essentially nobody does, because you cannot enrol in two
+sections of the same course at once.
+
+```{r tr-de-suffix-test}
+de <- tr |>
+  dplyr::filter(grepl("D[AB]\\*?\\s*$", D_course_id)) |>
+  dplyr::mutate(de_suffix = stringr::str_extract(D_course_id, "D[AB]"),
+                de_base   = sub("D[AB]\\*?\\s*$", "", D_course_id))
+
+chk_info("Rows with a DA/DB course ID", nrow(de),
+         detail = paste0(dplyr::n_distinct(de$de_base), " distinct base course(s)"))
+
+de_both <- de |>
+  dplyr::group_by(D_stu_id, D_year, de_base) |>
+  dplyr::summarise(suffixes = paste(sort(unique(de_suffix)), collapse = "+"),
+                   .groups = "drop") |>
+  dplyr::count(suffixes, name = "n_student_course_years") |>
+  dplyr::mutate(pct = round(100 * n_student_course_years /
+                              sum(n_student_course_years), 1))
+
+chk_info("Students taking both DA and DB of the same base course in one year",
+         "see table",
+         detail = "a large DA+DB share means term; near zero means section",
+         data = de_both)
+
+de_both
+```
+
+```{r tr-de-credits}
+de |>
+  dplyr::count(de_suffix, D_creds_possible, D_creds_earn, name = "n_rows") |>
+  dplyr::arrange(de_suffix, dplyr::desc(n_rows))
+```
+
+Credits by term. A semester course should be worth half a credit; anything else
+is worth understanding before credits get summed.
+
+```{r tr-term-credits}
+tr |>
+  dplyr::count(C_term, D_creds_possible, name = "n_rows") |>
+  dplyr::arrange(C_term, dplyr::desc(n_rows))
+```
+
+## 3.3 Course identifiers
+
+The base course ID, with the semester suffix stripped, is kept alongside the
+original. The Stage 7 join keys on the original ID **plus** the name, so the
+base is for reporting and for a fallback if the primary join underperforms.
+
+```{r tr-course-ids}
+tr <- tr |>
+  dplyr::mutate(
+    C_course_id_base = stringr::str_replace(D_course_id,
+                                            config$derived$course_id_strip_suffix, ""),
+    C_course_name_trimmed = trimws(D_course_name),
+    C_course_name_starred = grepl("\\*", D_course_name)
+  )
+
+chk_info("Distinct course IDs (as given)",  dplyr::n_distinct(tr$D_course_id))
+chk_info("Distinct course IDs (base)",      dplyr::n_distinct(tr$C_course_id_base))
+chk_info("Distinct course names",           dplyr::n_distinct(tr$D_course_name))
+chk_info("Course names containing an asterisk", sum(tr$C_course_name_starred))
+
+n_pairs <- tr |> dplyr::distinct(D_course_id, D_course_name) |> nrow()
+chk_info("Distinct course ID + name pairs", n_pairs,
+         detail = "this is the Stage 7 join key")
+```
+
+How much name variation sits behind a single course ID — the reason the join
+keys on both.
+
+```{r tr-id-name-variation}
+tr |>
+  dplyr::distinct(D_course_id, D_course_name) |>
+  dplyr::count(D_course_id, name = "n_names") |>
+  dplyr::count(n_names, name = "n_course_ids") |>
+  dplyr::arrange(n_names)
+```
+
+## 3.4 Grades and credits
+
+Two tiers of bounds, because "outside what I expected" and "cannot be a real
+measurement" are different questions.
+
+`percent` is a computed weighted average, not a rounded mark — 9,994 distinct
+values, and a near-continuous run of 100.01, 100.02, 100.03 at roughly eighty
+rows apiece. Grades just above 100 are **extra credit, genuinely earned**. A
+single bound at 100 would either halt on those or let 981 through; separating
+the tiers lets the plausible range describe the data while the hard range
+guards against values that are not grades at all.
+
+The plausible tier only reports. The hard tier gates only when
+`hard_tolerance_pct` is set in config, which is deliberately left unset for
+grades on this pass — read the distribution below, then choose.
+
+```{r tr-ranges}
+g_grade <- range_two_tier(tr$D_stu_grade,      config$ranges$D_stu_grade,      "D_stu_grade")
+g_earn  <- range_two_tier(tr$D_creds_earn,     config$ranges$D_creds_earn,     "D_creds_earn")
+g_poss  <- range_two_tier(tr$D_creds_possible, config$ranges$D_creds_possible, "D_creds_possible")
+
+tr <- tr |>
+  dplyr::mutate(
+    D_stu_grade            = g_grade$values,
+    D_creds_earn           = g_earn$values,
+    D_creds_possible       = g_poss$values,
+    C_grade_above_100      = g_grade$flag_plausible,
+    C_grade_not_a_grade    = g_grade$flag_hard,
+    C_creds_out_of_range   = g_earn$flag_plausible | g_poss$flag_plausible
+  )
+```
+
+### Shape of the grade tail
+
+How far above 100 does it actually go, and how thin does it get. This is the
+table to read before setting a bound.
+
+```{r tr-grade-tail}
+grade_tail <- describe_tail(tr$D_stu_grade, config$grade_tail_buckets, "D_stu_grade")
+grade_tail
+```
+
+```{r tr-grade-summary}
+tr |>
+  dplyr::filter(!is.na(D_stu_grade)) |>
+  dplyr::summarise(
+    rows          = dplyr::n(),
+    max           = max(D_stu_grade),
+    p99           = round(stats::quantile(D_stu_grade, .99), 2),
+    p999          = round(stats::quantile(D_stu_grade, .999), 2),
+    n_above_100   = sum(D_stu_grade > 100),
+    pct_above_100 = round(100 * mean(D_stu_grade > 100), 3),
+    n_above_110   = sum(D_stu_grade > 110),
+    n_above_150   = sum(D_stu_grade > 150))
+```
+
+If grades above 100 cluster in particular courses, the cause is weighted or
+extra-credit scoring. If they are spread evenly, it is more likely a gradebook
+setting applied district-wide.
+
+```{r tr-grade-by-course}
+tr |>
+  dplyr::filter(C_grade_above_100) |>
+  dplyr::count(D_course_id, D_course_name, name = "n_rows") |>
+  dplyr::mutate(pct_of_flagged = round(100 * n_rows / sum(n_rows), 1)) |>
+  dplyr::arrange(dplyr::desc(n_rows)) |>
+  utils::head(20)
+```
+
+```{r tr-grade-by-year}
+tr |>
+  dplyr::group_by(D_year) |>
+  dplyr::summarise(rows = dplyr::n(),
+                   pct_above_100 = round(100 * mean(D_stu_grade > 100, na.rm = TRUE), 2),
+                   max_grade = max(D_stu_grade, na.rm = TRUE),
+                   .groups = "drop")
+```
+
+The values that cannot be grades at all — and which courses they sit in. A
+value like 981 is most likely a misplaced decimal on 98.1, or a points total
+recorded in a percent field.
+
+```{r tr-grade-impossible}
+tr |>
+  dplyr::filter(C_grade_not_a_grade) |>
+  dplyr::count(D_stu_grade, D_course_id, D_course_name,
+               D_creds_earn, D_creds_possible, name = "n_rows") |>
+  dplyr::arrange(dplyr::desc(D_stu_grade)) |>
+  utils::head(30)
+```
+
+### Credits
+
+```{r tr-credit-outliers}
+tr |>
+  dplyr::filter(C_creds_out_of_range) |>
+  dplyr::count(D_creds_possible, D_creds_earn, D_course_name, name = "n_rows") |>
+  dplyr::arrange(dplyr::desc(D_creds_earn)) |>
+  utils::head(20)
+```
+
+Credits earned can never exceed credits attempted.
+
+```{r tr-credit-logic}
+tr <- tr |>
+  dplyr::mutate(C_creds_earn_exceeds_attempted =
+                  !is.na(D_creds_earn) & !is.na(D_creds_possible) &
+                  D_creds_earn > D_creds_possible)
+
+chk_info("Rows where credits earned exceed credits attempted",
+         sum(tr$C_creds_earn_exceeds_attempted),
+         data = tr |>
+           dplyr::filter(C_creds_earn_exceeds_attempted) |>
+           dplyr::count(D_creds_possible, D_creds_earn, name = "n_rows") |>
+           dplyr::arrange(dplyr::desc(n_rows)))
+
+chk_info("Rows with zero credits attempted", sum(tr$D_creds_possible == 0, na.rm = TRUE))
+chk_info("Rows with zero credits earned",    sum(tr$D_creds_earn == 0, na.rm = TRUE))
+```
+
+Tettra has no rule for this, so it is a decision to log rather than a rule to
+follow. Before deciding, it is worth knowing whether the dominant 0.5 to 1.0
+pattern is a **course-level convention** — some courses always award a full
+credit regardless of what the attempted field says — or something scattered.
+
+If a course ID shows 1.0 earned on every row, the attempted field is simply
+wrong for that course and the earned figure can be trusted. If the same course
+sometimes shows 0.5, the pattern is student-level and needs a different answer.
+
+```{r tr-credit-excess-courses}
+excess_courses <- tr |>
+  dplyr::filter(D_creds_possible == 0.5) |>
+  dplyr::group_by(D_course_id, D_course_name) |>
+  dplyr::summarise(rows = dplyr::n(),
+                   n_earn_1 = sum(D_creds_earn == 1.0, na.rm = TRUE),
+                   .groups = "drop") |>
+  dplyr::filter(n_earn_1 > 0) |>
+  dplyr::mutate(pct_of_course_at_1 = round(100 * n_earn_1 / rows, 1)) |>
+  dplyr::arrange(dplyr::desc(n_earn_1))
+
+chk_info("Courses showing the 0.5-attempted / 1.0-earned pattern",
+         nrow(excess_courses),
+         detail = "pct_of_course_at_1 near 100 means a course-level convention")
+
+utils::head(excess_courses, 25)
+```
+
+```{r tr-credit-excess-concentration}
+excess_courses |>
+  dplyr::mutate(bucket = cut(pct_of_course_at_1,
+                             breaks = c(0, 5, 25, 50, 75, 95, 100),
+                             include.lowest = TRUE)) |>
+  dplyr::group_by(bucket) |>
+  dplyr::summarise(n_courses = dplyr::n(),
+                   n_rows_at_1 = sum(n_earn_1), .groups = "drop")
+```
+
+```{r tr-credit-treatment}
+n_impossible <- sum(tr$D_creds_earn > config$credits$impossible_above, na.rm = TRUE)
+
+if (config$credits$impossible_treatment == "na") {
+  tr <- tr |>
+    dplyr::mutate(C_creds_impossible = !is.na(D_creds_earn) &
+                    D_creds_earn > config$credits$impossible_above,
+                  D_creds_earn = dplyr::if_else(C_creds_impossible,
+                                                NA_real_, D_creds_earn))
+  chk_info("Impossible credit values set to NA", n_impossible,
+           detail = paste0("earned above ", config$credits$impossible_above,
+                           "; the enrolment row is kept, only the number is removed"))
+} else if (config$credits$impossible_treatment == "drop") {
+  before <- nrow(tr)
+  tr <- tr |> dplyr::filter(is.na(D_creds_earn) |
+                              D_creds_earn <= config$credits$impossible_above)
+  chk_info("Rows dropped for impossible credit values", before - nrow(tr))
+} else {
+  chk_info("Impossible credit values left in place", n_impossible)
+}
+
+if (config$credits$earned_exceeds_attempted$treatment == "na_earned") {
+  tr <- tr |> dplyr::mutate(D_creds_earn =
+    dplyr::if_else(C_creds_earn_exceeds_attempted, NA_real_, D_creds_earn))
+  chk_info("Earned credits blanked where they exceeded attempted",
+           sum(tr$C_creds_earn_exceeds_attempted))
+}
+```
+
+## 3.5 Scope and grain
+
+Dropping a row removes whatever it was carrying, so scope reports what each
+rule costs in credits as well as in rows. At one row it is immaterial; the
+report exists so it cannot become material without being seen.
+
+```{r tr-scope}
+tr <- apply_scope(tr, config$scope$transcript, id_col = "D_stu_id",
+                  sum_cols = c("D_creds_earn", "D_creds_possible"))
+
+chk_no_na(tr, c("D_stu_id", "D_year", "D_course_id"),
+          "Core transcript keys present after scope")
+
+chk_unique(tr, c("D_stu_id", "D_year", "D_course_id"),
+           "One row per student / year / course")
+
+chk_stop("No fully duplicated rows", sum(duplicated(tr)) == 0)
+```
+
+### Course load and credit accumulation
+
+A student taking 16 semester records should attempt 8.0 credits. Whether they
+*earn* 8.0 is a different question, and the gap between the two is the thing
+worth watching: 2024 lands on 8.0 while 2022 comes in a full credit lower.
+
+Two explanations compete. Either students failed more in the earlier years, or
+those years carry more zero-credit courses that pad the record count without
+contributing credit. Putting attempted next to earned separates them — if
+attempted holds at 8.0 across all years and only earned dips, it is failure.
+
+```{r tr-load-credits}
+stu_year <- tr |>
+  dplyr::group_by(D_stu_id, D_year) |>
+  dplyr::summarise(
+    courses        = dplyr::n(),
+    courses_credit_bearing = sum(D_creds_possible > 0, na.rm = TRUE),
+    creds_attempted = sum(D_creds_possible, na.rm = TRUE),
+    creds_earned    = sum(D_creds_earn, na.rm = TRUE),
+    n_failed        = sum(D_creds_possible > 0 & D_creds_earn == 0, na.rm = TRUE),
+    .groups = "drop")
+
+stu_year |>
+  dplyr::group_by(D_year) |>
+  dplyr::summarise(
+    students             = dplyr::n(),
+    median_courses       = stats::median(courses),
+    median_credit_courses = stats::median(courses_credit_bearing),
+    median_attempted     = stats::median(creds_attempted),
+    median_earned        = stats::median(creds_earned),
+    median_failed        = stats::median(n_failed),
+    mean_failed          = round(mean(n_failed), 2),
+    pct_earning_all      = round(100 * mean(creds_earned >= creds_attempted), 1),
+    .groups = "drop")
+```
+
+Failure rates by year, at the row level rather than the student level. If the
+earlier years fail more, the credit gap explains itself.
+
+```{r tr-failure-by-year}
+tr |>
+  dplyr::filter(D_creds_possible > 0) |>
+  dplyr::group_by(D_year) |>
+  dplyr::summarise(
+    credit_bearing_rows = dplyr::n(),
+    n_zero_earned       = sum(D_creds_earn == 0, na.rm = TRUE),
+    pct_zero_earned     = round(100 * mean(D_creds_earn == 0, na.rm = TRUE), 1),
+    .groups = "drop")
+```
+
+And the share of records carrying no credit at all, which is the competing
+explanation.
+
+```{r tr-zero-credit-by-year}
+tr |>
+  dplyr::group_by(D_year) |>
+  dplyr::summarise(
+    rows                 = dplyr::n(),
+    n_zero_attempted     = sum(D_creds_possible == 0, na.rm = TRUE),
+    pct_zero_attempted   = round(100 * mean(D_creds_possible == 0, na.rm = TRUE), 2),
+    .groups = "drop")
+```
+
+```{r tr-credit-distribution}
+stu_year |>
+  dplyr::group_by(D_year) |>
+  dplyr::summarise(
+    p10 = stats::quantile(creds_earned, .10),
+    p25 = stats::quantile(creds_earned, .25),
+    p50 = stats::quantile(creds_earned, .50),
+    p75 = stats::quantile(creds_earned, .75),
+    p90 = stats::quantile(creds_earned, .90),
+    .groups = "drop")
+```
+
+```{r tr-output}
+transcript_cleaned <- tr
+chk_info("Stage 3 output rows", nrow(transcript_cleaned))
+chk_info("Distinct students in transcript", dplyr::n_distinct(transcript_cleaned$D_stu_id))
+```
+
+## 3.6 Coding file reconnaissance
+
+Not the join — that is Stage 7. This just reports what the coded file contains
+so the join can be written against its real column names.
+
+```{r coding-recon}
+if (!is.null(course_coding_raw)) {
+  chk_info("Coding file shape",
+           paste0(format(nrow(course_coding_raw), big.mark = ","), " rows x ",
+                  ncol(course_coding_raw), " cols"))
+  print(tibble::tibble(column = names(course_coding_raw),
+                       type   = purrr::map_chr(course_coding_raw,
+                                               ~ paste(class(.x), collapse = "/")),
+                       n_distinct = purrr::map_int(course_coding_raw,
+                                                   ~ dplyr::n_distinct(.x)),
+                       pct_missing = purrr::map_dbl(course_coding_raw,
+                                                    ~ round(100 * mean(is.na(.x)), 1))) |>
+          as.data.frame())
+} else {
+  chk_info("Coding file not available", "Stage 7 will stop")
+}
+```
+
+```{r coding-head}
+if (!is.null(course_coding_raw)) utils::head(course_coding_raw, 10)
+```
+
+### Stage 7 join preview
+
+Cheap to run now, and it de-risks the biggest remaining unknown. The join keys
+on course ID plus name. 46,780 transcript course names carry an asterisk, so if
+the coding file stripped those during cleaning, the exact match will miss on
+every one of them. Better to find that out here than at Stage 7.
+
+```{r coding-join-preview}
+if (!is.null(course_coding_raw)) {
+  tr_pairs <- tr |>
+    dplyr::distinct(D_course_id, D_course_name)
+
+  cd_pairs <- course_coding_raw |>
+    dplyr::distinct(d_course_id, d_course_name) |>
+    dplyr::rename(D_course_id = d_course_id, D_course_name = d_course_name)
+
+  exact <- dplyr::inner_join(tr_pairs, cd_pairs, by = c("D_course_id", "D_course_name"))
+
+  chk_info("Coding join preview — pairs in transcript", nrow(tr_pairs))
+  chk_info("Coding join preview — pairs in coding file", nrow(cd_pairs))
+  chk_info("Coding join preview — exact matches on ID + name",
+           paste0(format(nrow(exact), big.mark = ","), " (",
+                  round(100 * nrow(exact) / nrow(tr_pairs), 1), "% of transcript pairs)"))
+
+  # Weighted by rows, not pairs: an unmatched pair on one row matters less than
+  # an unmatched pair on ten thousand.
+  matched_rows <- tr |>
+    dplyr::semi_join(cd_pairs, by = c("D_course_id", "D_course_name")) |>
+    nrow()
+  chk_info("Coding join preview — transcript ROWS matched",
+           paste0(format(matched_rows, big.mark = ","), " (",
+                  round(100 * matched_rows / nrow(tr), 2), "%)"))
+
+  unmatched <- tr |>
+    dplyr::anti_join(cd_pairs, by = c("D_course_id", "D_course_name")) |>
+    dplyr::count(D_course_id, D_course_name, name = "n_rows") |>
+    dplyr::arrange(dplyr::desc(n_rows))
+
+  chk_info("Coding join preview — unmatched pairs", nrow(unmatched),
+           data = utils::head(unmatched, 25))
+}
+```
+
+If the exact match falls short, the next question is whether normalising the
+name closes the gap — asterisks stripped, whitespace collapsed, case folded.
+That tells us whether the fix belongs in the pipeline or in the coding file.
+
+```{r coding-join-fallback}
+if (!is.null(course_coding_raw)) {
+  norm <- function(x) tolower(trimws(gsub("\\s+", " ", gsub("\\*", "", x))))
+
+  tr_norm <- tr |>
+    dplyr::mutate(k_id = trimws(D_course_id), k_nm = norm(D_course_name))
+
+  cd_norm <- course_coding_raw |>
+    dplyr::distinct(d_course_id, d_course_name) |>
+    dplyr::mutate(k_id = trimws(d_course_id), k_nm = norm(d_course_name)) |>
+    dplyr::distinct(k_id, k_nm)
+
+  matched_norm <- tr_norm |> dplyr::semi_join(cd_norm, by = c("k_id", "k_nm")) |> nrow()
+
+  chk_info("Coding join preview — rows matched after name normalisation",
+           paste0(format(matched_norm, big.mark = ","), " (",
+                  round(100 * matched_norm / nrow(tr), 2), "%)"),
+           detail = "asterisks removed, whitespace collapsed, case folded")
+
+  # ID alone, as an upper bound on what any name-level fix could achieve.
+  matched_id <- tr |>
+    dplyr::semi_join(course_coding_raw |>
+                       dplyr::distinct(D_course_id = d_course_id),
+                     by = "D_course_id") |> nrow()
+  chk_info("Coding join preview — rows matched on course ID alone",
+           paste0(format(matched_id, big.mark = ","), " (",
+                  round(100 * matched_id / nrow(tr), 2), "%)"),
+           detail = "upper bound for any name-matching fix")
+}
+```
+
+## 3.7 Trace students
+
+```{r tr-trace}
+transcript_cleaned |>
+  dplyr::filter(D_stu_id %in% trace_ids) |>
+  dplyr::select(D_stu_id, D_year, D_course_id, C_course_id_base, D_course_name,
+                C_term, D_stu_grade, D_creds_earn, D_creds_possible) |>
+  dplyr::arrange(D_stu_id, D_year, D_course_id) |>
+  utils::head(40)
+```
 
 ---
 
 # Stage 4 — Cross-file reconciliation
 
-> Not built yet.
+> Next step. All 47,058 transcript students appear in demographics, so the
+> exclude-flag routine in the old `02` collapses to a single check.
 
 ---
 
 # Stage 5 — Home school assignment
 
-> Not built yet.
-
 ---
 
 # Stage 6 — Cohort selection
 
-> Not built yet.
-
 ---
 
 # Stage 7 — Course coding join
-
-> Not built yet.
 
 ---
 
 # Stage 8 — Output and check report
 
 ```{r final-report}
-chk_report()
+check_log <- chk_report(print_table = FALSE)
+```
+
+```{r final-table}
+check_log |>
+  dplyr::select(seq, stage, check, severity, result, value)
 ```
 
 ```{r write-log}
