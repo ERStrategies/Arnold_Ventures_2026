@@ -286,8 +286,9 @@ weights:
 # Keys must EXACTLY match the school names in C_tch_location_name (see 4.4 evidence).
 # Fill in each school's real period count from its bell schedule (this is the
 # utilization denominator; e.g. a 7-period day = 7, a block day with advisory = 4.2).
-periods_per_school:
-  default: 7
+full_utilization:
+  default: 5
+  by_school: {}
 
 # ===========================================================================
 # SECTION 10: BELL MINUTES — Actual clock time per period

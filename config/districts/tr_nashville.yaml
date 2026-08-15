@@ -1,80 +1,57 @@
 # =============================================================================
-# 00_district_config.yml
+# tr_nashville.yaml — District config for the TRANSCRIPT pipeline
 #
-# This is THE configuration file for the entire TRANSCRIPT pipeline.
-# New district = copy this file and edit the values below; the code doesn't change.
+# New district = copy this file, edit the values, change no code.
+# Anything district-specific belongs here. If you find yourself editing a file
+# in R/ to onboard a district, that value should have been in this file.
 #
-# HOW TO USE THIS FILE:
-#   You won't fill everything in at once. Different sections become relevant
-#   as you move through the stages. Here's the order:
-#
-#   BEFORE Stage 01 (Explore):
-#     - "district", "year", "raw_data_folder_path", "raw_files" (lines ~20-30)
-#       You need these so Stage 01 can find and load your raw data.
-#
-#   DURING/AFTER Stage 01 (Explore):
-#     - "column_map" — use the Claude skill tofill in after you've looked at 
-#       the raw data and know which district column corresponds to which standard name.
-#     - "stu_demographics_join" — fill in once you've identified the join key
-#       and which demographic columns to bring in.
-#     - "scope" — decide which rows to drop (e.g., missing student IDs).
-#     - "intake" — note how time is encoded (expression vs. period+rotation).
-#
-#   BEFORE Stage 02 (Coding & Exclusions):
-#     - "raw_files > course_coding" — update the path once the coding file exists.
-#     - "coding" — set the join key and uncoded threshold.
-#     - "exclusions" — define which courses to exclude from each metric.
-#       (You'll refine these as you review Check 2.6 output.)
-#
-#   BEFORE Stage 03 (Weights, Minutes & DB Resolution):
-#     - "class_id" — define what combination of fields makes a unique class.
-#     - "time_format" and "time_cols" — confirm how time is encoded.
-#     - "weights" — set term weights, rotation weights, and period weights.
-#     - "bell_minutes" — enter clock time per period from the bell schedule.
-#     - "expression" — define how schedule expressions parse into meetings.
-#     - "db_sizing_filters" — optional filters for the double-booking analysis.
-#     - "db_resolution" and "teacher_db" — resolution strategy settings.
-#
-#   BEFORE Stage 04 (Precision-Ready):
-#     - "self_contained" and "buckets" — thresholds and class size buckets.
-#
+# Lines marked TODO need a decision from you before the pipeline is trusted.
 # =============================================================================
 
+
 # ===========================================================================
-# SECTION 1: BASICS — Where is the data?
-# WHEN TO FILL IN: Before you run ANYTHING. Stage 01 won't work without this.
+# 1. BASICS
 # ===========================================================================
 
 district: Metro Nashville Public Schools
 year: "2021-22 to 2024-25"
 
-# The SharePoint folder path where all data for this district lives.
-# Everything below is relative to this path.
-raw_data_folder_path:         "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/2. Transcript"
-# File paths within that folder for each raw data source.
+raw_data_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/2. Transcript"
 raw_files:
-  transcript_raw:             "/0. Raw Data/Transcripts_2122to2425.csv"
-  stu_demographics:           "/0. Raw Data/Demographics_2122to2425.csv"
+  transcript_raw:    "/0. Raw Data/Transcripts_2122to2425.csv"
+  stu_demographics:  "/0. Raw Data/Demographics_2122to2425.csv"
 
-# COURSE CODING FILE:
-# This file doesn't exist when you first start — you CREATE it during Stage 01
-# by exporting a blank template, then filling it in (manually or with AI help).
-# Once it's ready, put it in the /1. Coding folder and update this path.
-# Stage 02 will NOT work correctly until this file exists and is coded.
-source_of_truth_folder_path:  "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/3. Source of Truth"
+source_of_truth_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/3. Source of Truth"
 source_of_truth_files:
-  course_catalog:             "/mnps_course_coding_2122_2425.xlsx"
-  location_coding:            "/mnps_high_schools.xlsx"
+  course_coding:     "/mnps_course_coding_2122_2425.xlsx"   # the final ERS-coded file
+  location_coding:   "/mnps_high_schools.xlsx"
+
+# Sheet names for Excel sources. Omit or leave null for the first sheet.
+sheets:
+  course_coding:     null                                    # TODO confirm
+
+# SharePoint drive per source group. Omit a key to use the default drive.
+drives:
+  raw_data:          null
+  source_of_truth:   null
+  output:            "client_work_drive"
+
 
 # ===========================================================================
-# COLUMN MAP — What are the district's column names?
-# WHEN TO FILL IN: After running Stage 01's raw profile, where you can see
-#   every column name in the data. Map each one to its standard D_ name.
-#   Stage 01 will NOT rename columns correctly until this is filled in.
-#
-# Format: standard_name: district_column_name
-# The left side (D_...) is what the pipeline expects. The right side is what
-# the district actually called that column in their data export.
+# 2. PATHS — local working locations
+# Cache holds student-level data. Keep it inside your secure area and
+# out of git (see .gitignore).
+# ===========================================================================
+
+paths:
+  cache_dir:  null    # null = <repo>/cache/nashville
+  output_dir: null    # null = <repo>/output/nashville
+  output_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/2. Transcript/2. Processed Data"
+
+
+# ===========================================================================
+# 3. COLUMN MAP — standard_name: district_column_name
+# Right-hand values are post-janitor::clean_names(), i.e. snake_case.
 # ===========================================================================
 
 column_map:
@@ -104,69 +81,145 @@ column_map:
 
 
 # ===========================================================================
-# SECTION 4: DEMOGRAPHICS JOIN — How to merge student demographics onto schedules
-# WHEN TO FILL IN: During Stage 01, after you've identified the matching
-#   student ID column in both files. Stage 01 needs this to merge demographics.
+# 4. DERIVED FIELDS — things the pipeline builds rather than reads
 # ===========================================================================
 
-stu_demographics_join:
-  # Which column links students between the two files?
-  key: D_stu_id
+derived:
+  # The transcript file has no year column. D_year is created from this one so
+  # it can join to demographics on student + year.
+  # TODO confirm D_end_year is the right school year for a transcript row.
+  transcript_year_from: D_end_year
 
-  # Which demographic columns to bring into the schedule data?
-  brings_in: [D_stu_grade, D_stu_race, D_stu_ell_flag, D_stu_swd_flag, D_stu_poverty_flag]
+  # Date parsing formats. Enter/exit arrive in different formats in the
+  # Nashville demographics export.
+  date_formats:
+    D_stu_enter_date: "%m/%d/%Y"
+    D_stu_exit_date:  "%Y-%m-%d"
 
-  # Optional: recode raw values to something more usable.
-  # For example, convert "Y"/"N" text to 1/0 numbers.
-  # Delete or hash out this section if no recoding is needed.
-  # recode:
-  #   D_stu_swd_flag: {"Y": 1, "N": 0}
-  #   D_stu_ell_flag: {"Y": 1, "N": 0}
-  #   D_stu_poverty_flag: {"Y": 1, "N": 0}
+  # Students with no exit date are treated as enrolled to the end of the year.
+  force_missing_exit_date: true
+  school_year_end_mmdd: "06-30"
+
+  # Term is read off the course name suffix, since the transcript has no term
+  # column. Rules are applied in order; first match wins.
+  term_from_course_name:
+    - { pattern: "S1", value: "Semester 1" }
+    - { pattern: "S2", value: "Semester 2" }
+
+  # Suffix stripped from transcript course IDs before matching the coded file.
+  course_id_strip_suffix: '([[:punct:]]?\s*)?(S1|S2)\s*$'
+
+  # Location names carry numbers in the demographics export; strip for matching.
+  location_name_strip_pattern: '[0-9-]'
+
 
 # ===========================================================================
-# SECTION 5: SCOPE — Which rows to keep?
-# WHEN TO FILL IN: During Stage 01. Decide what makes a row unusable
-#   (e.g., no student ID means we can't link it to anything).
+# 5. SCOPE — which rows are usable at all
 # ===========================================================================
 
 scope:
-  # Drop any row where these columns are null/NA/empty.
-  # This happens AFTER the demographics merge, so missing demographic matches
-  # will cause rows to drop if you include demographic fields here.
-  drop_when_null: ["D_stu_id", "D_stu_grade"]
-
-  # Additional row filters as R expressions. Rows that do NOT satisfy all
-  # expressions are dropped. Use standard R syntax.
-  filters: ["D_stu_grade >= 9"]
+  drop_when_null: ["D_stu_id", "D_stu_grade_level"]
+  filters: ["D_stu_grade_level >= 9"]
 
 
 # ===========================================================================
-# SECTION 6: CODING & EXCLUSIONS — What is each course, and what to exclude?
-# WHEN TO FILL IN: Before Stage 02. You'll refine exclusion rules iteratively
-#   as you review the Check 2.6 output (which shows what's being excluded).
-#   Stage 02 will run without exclusions, but results won't be meaningful.
+# 6. COHORT DEFINITION
+# Previously hardcoded across 02 and 03 in two places that disagreed.
+# ===========================================================================
+
+cohort:
+  entry_year:         2022    # D_year in which the cohort is in entry_grade
+  entry_grade:        9
+  years_required:     4
+  final_year:         2025
+
+  # Duration: minimum days enrolled to count a year as "present".
+  duration_min_days:  200
+  duration_rule:      all_years    # all_years | bookends | none
+
+  # Progression: expected grade level by year.
+  progression:
+    2022: 9
+    2023: 10
+    2024: 11
+    2025: 12
+  progression_rule:   all_years    # all_years | bookends | none
+
+  # M_days_enrolled had three competing definitions across the old scripts
+  # (exit-enter, sum of unique per student-year, max per student-year).
+  # This pins it to one. See notes in the .qmd.
+  # TODO confirm: sum is right if enrolment spells are non-overlapping.
+  days_enrolled_rule: sum_of_spells   # sum_of_spells | max_spell
+
+  # Home school = school with the most days enrolled that year; ties broken by
+  # preferring a school in schools_to_include, then at random with the seed below.
+  home_school_tiebreak: prefer_included
+
+  # Canonical school names. Aliases below are collapsed to these first, so a
+  # spelling variant cannot silently drop a school.
+  # TODO the old scripts disagreed: 02 had "Hillwood High", 03 had
+  #      "Hillwood High School". Confirm which is the real name in the data.
+  schools_to_include:
+    - "Antioch High School"
+    - "Cane Ridge High School"
+    - "Glencliff High School"
+    - "Hillsboro High"
+    - "Hillwood High"
+    - "Hunters Lane High"
+    - "James Lawson High"
+    - "John Overton High"
+    - "Maplewood High"
+    - "McGavock High"
+    - "PearlCohn High"
+    - "Stratford"
+    - "Whites Creek High School"
+
+  school_name_aliases:
+    "James Lawson High School": "James Lawson High"
+    "Hillwood High School":     "Hillwood High"
+
+
+# ===========================================================================
+# 7. THRESHOLDS — the numbers that trip a structural check
+# ===========================================================================
+
+thresholds:
+  # Course coding join. Below this share of transcript rows matched, stop.
+  # TODO set the real number once we see the first match rate at Stage 8.
+  min_course_coding_match_pct: 95
+
+  # Share of transcript students that must also appear in demographics.
+  min_student_match_pct: 95
+
+
+# ===========================================================================
+# 8. TRACING — students followed by hand through every stage
+# Replaces the hardcoded IDs scattered through the old scripts.
+# ===========================================================================
+
+tracing:
+  students:
+    - 190137047
+    - 190173946
+    - 190162750
+    - 190181214
+  random_n: 5
+  seed: 123
+
+
+# ===========================================================================
+# ===========================================================================
+# NOT USED BY THE TRANSCRIPT PIPELINE
+# Retained from the original file for the master schedule / class size work.
+# Nothing below this line is read by transcript_pipeline.qmd.
+# ===========================================================================
 # ===========================================================================
 
 coding:
-  # Which column to join the coding file on (must exist in both cs_data and coding file)
   join_key: [D_course_id, D_course_name]
-
-  # Flag if more than this % of records are still "UNCODED" after the merge
   uncoded_flag_threshold_pct: 2
-
-  # Check 2.7: flag time-slots with very few distinct courses (likely not real instruction)
   max_unique_courses: 5
 
-# EXCLUSION RULES:
-# These determine which records are "Include" vs "Exclude" for each metric.
-# A record is excluded if ANY rule for that metric matches it.
-#
-# Available operators: eq (equals), ne (not equals), in (is one of), not_in (is not one of)
-# Rules referencing columns that don't exist yet are safely skipped.
-#
-# C_course_time_exclude: controls what's included in TIME analysis
-# C_class_size_and_teacher_load_exclude: controls what's included in CLASS SIZE and TEACHER LOAD
 exclusions:
   C_course_time_exclude:
     - { col: C_course_subject_area, op: eq, val: Untracked }
@@ -178,124 +231,35 @@ exclusions:
     - { col: C_course_subject,      op: in, val: [Maintenance, Internship, Teaching Assistant, Credit Recovery] }
     - { col: C_course_format,       op: eq, val: Virtual }
 
-
-# ===========================================================================
-# SECTION 7: CLASS IDENTITY — What makes a unique "class"?
-# WHEN TO FILL IN: Before Stage 03. The class ID recipe determines how we
-#   group students into classes. Getting this wrong means incorrect class sizes
-#   and double-booking detection. Check 2.8 validates this.
-# ===========================================================================
-
 class_id:
-  # Which columns, combined, uniquely identify a single class?
-  # Typically: school + time + teacher (and sometimes section ID).
   recipe: [D_location_id, D_employee_id, D_term, D_period, D_course_section_id]
 
-
-# ===========================================================================
-# SECTION 8: TIME FORMAT — How does the schedule encode when classes meet?
-# WHEN TO FILL IN: During Stage 01, once you understand the time columns.
-#   Must be correct before Stage 03 (weights depend on this).
-# ===========================================================================
-
-# Two options:
-#   "expression" = one column like "3(A-B)" that encodes period AND rotation together
-#   "period_rotation" = separate columns for period and rotation
 time_format: period_rotation
-
 time_cols:
   expression:      [D_expression]
   period_rotation: [D_period, D_rotation]
 
-
-# ===========================================================================
-# SECTION 9: WEIGHTS — How much of a full schedule does each class represent?
-# WHEN TO FILL IN: Before Stage 03. You need the bell schedule and an
-#   understanding of terms/rotations from the district.
-#   Stage 03 will NOT produce correct results without these.
-#
-# KEY CONCEPT: Weight is dimensionless — it represents a FRACTION of a full
-# schedule, not minutes or hours. Minutes come separately (see bell_minutes).
-# ===========================================================================
-
 weights:
-  # TERM WEIGHTS: What fraction of the year does each term cover?
-  # A full-year term = 1.0, a semester = 0.5, a quarter = 0.25, etc.
-  # The keys here are the actual term values that appear in D_term.
-  term:          { Q1: 0.25,      Q2: 0.25,      Q3: 0.25,      Q4: 0.25      }
-
-  # TERM INTERVALS: What portion of the year does each term span? (0 = start, 1 = end)
-  # Used to detect overlapping terms for double-booking.
+  term:          { Q1: 0.25, Q2: 0.25, Q3: 0.25, Q4: 0.25 }
   term_interval: { Q1: [0, 0.25], Q2: [0.25, 0.5], Q3: [0.5, 0.75], Q4: [0.75, 1] }
-
-  # TERM EXPANSION: Which sub-terms does each term cover?
-  # A full-year term "expands" into both semesters; a semester expands into just itself.
-  # Used so a full-year class can conflict with a semester class.
-  term_expands:  { Q1: [Q1],      Q2: [Q2],      Q3: [Q3],      Q4: [Q4]      }
-
-  # ROTATION WEIGHTS: What fraction of an A/B cycle does a rotation represent?
-  # If a school alternates A/B days, each day = 0.5. If there is no rotation, each day = 1.0.
-  # Override specific school+meeting combos if they differ (e.g., advisory meets less often).
-  # Precedence: by_school > default.
+  term_expands:  { Q1: [Q1], Q2: [Q2], Q3: [Q3], Q4: [Q4] }
   rotation:
-    # For Nashville: they didn't provide rotation data, but we know all HSs have the same 7-period hybrid block schedule with no rotation.
     default: 1
     by_school: {}
-    
-    # For Springfield
-    # default: 0.5
-    # by_school:
-    #   "SCI TECH": { "8@A": 0.2, "8@B": 0.2 }   # advisory ~once/week
-
-  # PERIOD WEIGHTS: How many "slots" does one period represent?
-  # Usually 1.0. Set to 2.0 for true block periods (rare — use only if a school
-  # has some periods that are literally twice as long as others).
-  # by_period overrides apply to ALL schools; by_school overrides apply to specific schools.
-  # Precedence: by_period > by_school > default.
   period:
     default: 1.0
     by_period: { MISC: 0, CCR: 0 }
     by_school: {}
 
-
-# ===========================================================================
-# SECTION 10: BELL MINUTES — Actual clock time per period
-# WHEN TO FILL IN: Before Stage 03. Get this from the district's bell schedule.
-#   Weight × Minutes = real instructional time.
-#
-# NOTE: These are SEPARATE from weights on purpose. Weights tell us the
-# fraction of a schedule; minutes tell us the actual time. Keeping them
-# separate lets us compare schools with different period lengths fairly.
-# ===========================================================================
-
 bell_minutes:
-  # For Nashville: all HSs have the same hybrid block schedule.
-  # Minutes per period are averaged over the week (50 mins on M/W/F, 90 mins of either Tues or Thurs)
-  default: 48 
-  # For Springfield: the two HSs had different bell schedules, so we had to override by school.
-  # Leaving this here will not mess things up since there aren't any schools with D_location_name "PUTNAM" or "SCI TECH" in your data.
+  default: 48
   by_school:
     "PUTNAM":   { default: 43 }
     "SCI TECH": { default: 90, overrides: { "8@A": 55, "8@B": 55 } }
 
-
-# ===========================================================================
-# SECTION 11: DOUBLE-BOOKING ANALYSIS SETTINGS
-# WHEN TO FILL IN: Before Stage 03. These control how DB is detected and resolved.
-# ===========================================================================
-
-# SIZING FILTERS: Optional "what-if" filters for the double-booking analysis ONLY.
-# These temporarily remove rows from the DB calculation so you can see what
-# the DB rate would be without certain records. They do NOT affect the actual data.
-# To use no filters, set: db_sizing_filters: []
 db_sizing_filters:
-# - { col: D_course_name,     op: in,     val: "VHS Anchor Year" } # For Springfield
-  - { col: D_period,          op: in,     val: ["MISC", "CCR"] } # For Nashville
+  - { col: D_period, op: in, val: ["MISC", "CCR"] }
 
-# EXPRESSION GRAMMAR: How to parse D_expression into individual meetings.
-# "atoms" = named period slots (empty if periods are plain numbers like 1, 2, 3).
-# "rotations" = which token means which day(s). "A-B" means BOTH A and B days.
-# Example from Springfield
 expression:
   atoms: []
   expands: {}
@@ -305,30 +269,17 @@ expression:
     "A-B": ["A", "B"]
     AB:    ["A", "B"]
 
-# RESOLUTION STRATEGY: How to handle double-bookings once detected.
-# Options for each: "full" (resolve all), "none" (skip), or custom rules.
 db_resolution:
   student: full
   teacher: full
   class:   full
 
-# TEACHER DB SETTINGS:
-# consolidate_max_size: when merging co-taught classes, max combined size allowed
-# exempt_subjects: subjects where teacher DB is expected and shouldn't be resolved
 teacher_db:
   consolidate_max_size: 35
   exempt_subjects: ["PE/Health", "Art/Music"]
 
-
-# ===========================================================================
-# SECTION 12: STAGE 04 — PRECISION-READY SETTINGS
-# WHEN TO FILL IN: Before Stage 04.
-# ===========================================================================
-
-# Self-contained classroom thresholds
 self_contained:
-  swd_ell_threshold_pct: 50        # flag classes where SWD+ELL students exceed this %
+  swd_ell_threshold_pct: 50
 
-# Class size buckets for reporting (min and max of each bucket)
 buckets:
   class_size: [[0, 6], [7, 12], [13, 18], [19, 24], [25, 30], [31, 35], [36, null]]

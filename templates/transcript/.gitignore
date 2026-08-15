@@ -1,0 +1,40 @@
+# =============================================================================
+# Block data by default, allow code. Never the other way around.
+# =============================================================================
+
+# Working directories that hold district data
+cache/
+output/
+data/
+data-raw/
+
+# Data file extensions, wherever they appear
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.xlsm
+*.rds
+*.RData
+*.rda
+*.sav
+*.dta
+*.parquet
+*.feather
+
+# Allow synthetic fixtures and config, explicitly
+!data-sample/**
+!config/**
+
+# Rendered reports may contain student counts and names
+*.html
+!README.html
+
+# R / RStudio / Positron
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+.Renviron
+renv/library/
+renv/staging/

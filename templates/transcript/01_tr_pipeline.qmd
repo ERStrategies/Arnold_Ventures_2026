@@ -1,0 +1,229 @@
+---
+title: "Transcript Pipeline"
+subtitle: "Metro Nashville Public Schools"
+date: today
+params:
+  district: "nashville"
+  refresh_raw: false      # TRUE re-reads every source from SharePoint
+  smoke_test: true        # TRUE runs the check-framework self-test in Stage 0
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    df-print: paged
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+editor: source
+---
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(echo = TRUE)
+source(here::here("R", "setup.R"))
+```
+
+# What this file is
+
+One document, run top to bottom, replacing the eight scripts that used to run
+in sequence. Everything district-specific lives either here or in
+`config/districts/tr_nashville.yaml`. Everything reusable lives in `R/`.
+
+**Reading the output.** Every check prints as it runs:
+
+- `[PASS]` — a structural check held.
+- `[FAIL]` — a structural check broke. The render stops here. Offending rows
+  are printed, and available afterwards via `chk_offenders("<check name>")`.
+- `[info]` — a count or table to eyeball. Never halts anything.
+
+The last section prints a summary table of every check in the run.
+
+**Stages.**
+
+| # | Stage | Replaces |
+|---|-------|----------|
+| 0 | Setup and config | Part 0 of all eight scripts |
+| 1 | Load sources | Part 1 of all eight scripts |
+| 2 | Student cleaning | `01_raw_data_student_validation` |
+| 3 | Transcript cleaning | `01_raw_data_transcript_validation` |
+| 4 | Cross-file reconciliation | `02_cross_file_validation` §2.1 |
+| 5 | Home school assignment | `02_cross_file_validation` §2.2 |
+| 6 | Cohort selection | `03_student_cohort_selection` |
+| 7 | Course coding join | new — the rollup that never existed |
+| 8 | Output and check report | Part 3/4 of all eight scripts |
+
+---
+
+# Stage 0 — Setup and configuration
+
+## 0.1 Load and validate the config
+
+`load_config()` fails on the spot, listing every problem at once, if the YAML
+is missing anything the pipeline depends on. Better than discovering a missing
+column map at Stage 4.
+
+```{r config}
+chk_reset()
+chk_stage("Stage 0 — Setup")
+
+config <- load_config(district = params$district)
+config_summary(config)
+```
+
+## 0.2 Record the run
+
+Stamped so any number produced here can be traced back to the exact config and
+code that made it.
+
+```{r run-manifest}
+run_manifest <- tibble::tibble(
+  run_time    = Sys.time(),
+  district    = config$district,
+  config_file = basename(config$.meta$path),
+  config_md5  = substr(config$.meta$md5, 1, 8),
+  refresh_raw = params$refresh_raw,
+  r_version   = paste0(R.version$major, ".", R.version$minor),
+  user        = Sys.info()[["user"]]
+)
+
+chk_info("Run stamped", run_manifest$config_md5,
+         detail = paste("config", run_manifest$config_file))
+
+run_manifest
+```
+
+## 0.3 Config decisions worth seeing in the report
+
+These were hardcoded in the old scripts, in more than one place, and in one
+case inconsistently. Printing them here means a reviewer can see the cohort
+definition without reading any code.
+
+```{r config-decisions}
+chk_info("Cohort entry", paste0("grade ", config$cohort$entry_grade,
+                                " in ", config$cohort$entry_year))
+chk_info("Years required", config$cohort$years_required)
+chk_info("Duration rule", paste0(config$cohort$duration_rule, ", >= ",
+                                 config$cohort$duration_min_days, " days/yr"))
+chk_info("Progression rule", config$cohort$progression_rule)
+chk_info("Days enrolled rule", config$cohort$days_enrolled_rule)
+chk_info("Schools in scope", length(config$cohort$schools_to_include),
+         data = tibble::tibble(school = config$cohort$schools_to_include))
+
+tibble::tibble(
+  alias     = names(config$cohort$school_name_aliases),
+  resolves_to = unlist(config$cohort$school_name_aliases)
+)
+```
+
+## 0.4 Check-framework self-test
+
+Runs against fabricated data, touches nothing real. Confirms `[PASS]`,
+`[info]`, and `[FAIL]` all behave before any district data is involved. Set
+`smoke_test: false` in the header once you trust it.
+
+```{r smoke-test}
+#| eval: !expr params$smoke_test
+
+toy <- tibble::tibble(
+  D_stu_id = c(1, 1, 2, 3),
+  D_year   = c(2022, 2023, 2022, 2022),
+  score    = c(10, 20, 30, NA)
+)
+
+# Should PASS
+chk_unique(toy, c("D_stu_id", "D_year"), "Self-test: toy is unique on id + year")
+chk_rows_stable(toy, toy, "Self-test: row count stable")
+chk_n_distinct(toy, "D_stu_id", "Self-test: distinct students")
+
+# Should print an info table
+chk_info("Self-test: rows by year",
+         dplyr::n_distinct(toy$D_year),
+         data = dplyr::count(toy, D_year))
+
+# Should FAIL — wrapped so the render survives the demonstration
+demo <- try(chk_no_na(toy, "score", "Self-test: deliberate failure"), silent = TRUE)
+cat("\nFailure was caught. Offending rows retained:\n")
+print(chk_offenders("Self-test: deliberate failure"))
+```
+
+## 0.5 Reset after the self-test
+
+Clears the toy checks so the report only contains real ones.
+
+```{r post-smoke-reset}
+#| eval: !expr params$smoke_test
+chk_reset()
+chk_stage("Stage 0 — Setup")
+chk_info("Self-test complete", "framework verified, log reset")
+```
+
+---
+
+# Stage 1 — Load sources
+
+> Not built yet. Next step.
+
+Reads the transcript, demographics, and coded course file once each, caching
+them locally as `.rds`. Re-runs read from cache in under a second. Set
+`refresh_raw: true` in the header when the district sends new data.
+
+```{r load-sources}
+#| eval: false
+chk_stage("Stage 1 — Load sources")
+
+transcript_raw <- read_source("transcript_raw",   config, refresh = params$refresh_raw)
+demographics_raw <- read_source("stu_demographics", config, refresh = params$refresh_raw)
+course_coding_raw <- read_source("course_coding",  config, refresh = params$refresh_raw,
+                                 sheet = config$sheets$course_coding)
+```
+
+---
+
+# Stage 2 — Student cleaning
+
+> Not built yet.
+
+---
+
+# Stage 3 — Transcript cleaning
+
+> Not built yet.
+
+---
+
+# Stage 4 — Cross-file reconciliation
+
+> Not built yet.
+
+---
+
+# Stage 5 — Home school assignment
+
+> Not built yet.
+
+---
+
+# Stage 6 — Cohort selection
+
+> Not built yet.
+
+---
+
+# Stage 7 — Course coding join
+
+> Not built yet.
+
+---
+
+# Stage 8 — Output and check report
+
+```{r final-report}
+chk_report()
+```
+
+```{r write-log}
+#| eval: false
+write_check_log(config)
+```

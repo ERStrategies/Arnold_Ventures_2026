@@ -102,7 +102,8 @@ add_teacher_metrics <- function(unified, config) {
   }
 
   # weighted periods -> utilization
-  pps <- config$periods_per_school
+  fu_def    <- config$full_utilization$default
+  fu_school <- config$full_utilization$by_school
   util <- unified |>
     filter(C_teacher_load_exclude == "Include") |>
     group_by(C_tch_location_name, D_employee_id, D_term, D_rotation, D_period) |>
@@ -110,8 +111,13 @@ add_teacher_metrics <- function(unified, config) {
     group_by(C_tch_location_name, D_employee_id) |>
     summarise(M_tch_num_periods = sum(M_teacher_class_weight, na.rm = TRUE), .groups = "drop") |>
     mutate(C_school_total_periods = vapply(as.character(C_tch_location_name),
-             function(s) { v <- pps[[s]]; if (is.null(v)) NA_real_ else as.numeric(v) }, numeric(1)),
-           M_tch_utilization  = M_tch_num_periods / C_school_total_periods)
+             function(s) {
+               v <- fu_school[[s]]
+               if (!is.null(v)) as.numeric(v)
+               else if (!is.null(fu_def)) as.numeric(fu_def)
+               else NA_real_
+             }, numeric(1)),
+           M_tch_utilization = M_tch_num_periods / C_school_total_periods)
 
   unified <- unified |>
     left_join(util |> select(D_employee_id, C_tch_location_name,
