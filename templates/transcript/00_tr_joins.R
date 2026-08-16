@@ -91,8 +91,18 @@ join_checked <- function(x, y, by, check,
              paste0(pct, "% (", format(n_matched, big.mark = ","), " of ",
                     format(n_after, big.mark = ","), " rows)"))
 
+    # dplyr selection rather than base `[`. A data.table reads a bare symbol in
+    # the second position as its own `j` expression and errors, and ers_read_
+    # sharepoint returns data.tables via fread.
+    unmatched_keys_fn <- function() {
+      out |>
+        dplyr::select(dplyr::all_of(x_keys)) |>
+        dplyr::filter(!matched) |>
+        dplyr::distinct()
+    }
+
     if (!is.null(min_match_pct)) {
-      unmatched_keys <- out[!matched, x_keys, drop = FALSE] |> dplyr::distinct()
+      unmatched_keys <- unmatched_keys_fn()
       chk_stop(paste0(check, " — match rate at or above ", min_match_pct, "%"),
                pct >= min_match_pct,
                value  = paste0(pct, "%"),
@@ -102,7 +112,7 @@ join_checked <- function(x, y, by, check,
                                " distinct unmatched key(s)"),
                offenders = unmatched_keys)
     } else if (report_unmatched && n_matched < n_after) {
-      unmatched_keys <- out[!matched, x_keys, drop = FALSE] |> dplyr::distinct()
+      unmatched_keys <- unmatched_keys_fn()
       chk_info(paste0(check, " — unmatched keys"),
                nrow(unmatched_keys),
                data = utils::head(unmatched_keys, n_show))

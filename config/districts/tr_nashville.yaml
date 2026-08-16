@@ -64,6 +64,13 @@ column_map:
     D_start_year:        start_year
     D_end_year:          end_year
 
+  # The coded course file is ERS-produced, so it already uses standard names -
+  # janitor::clean_names() only lowercases them. Stage 7 restores the C_ prefix
+  # by convention; only the two district-facing join keys need mapping.
+  course_coding:
+    D_course_id:         d_course_id
+    D_course_name:       d_course_name
+
   demographics:
     D_stu_id:            cid
     D_location_id:       meno
@@ -107,11 +114,19 @@ derived:
   # CONFIRMED: the S1/S2 marker is on course_number for 98.9% of rows and on
   # course_name for 96.8%, so the number is tried first and the name is the
   # fallback. Trailing asterisks and a bare " S" are tolerated.
+  # RESOLVED: DA/DB are term markers, not sections. Cross-tabbed against the
+  # term read from the course name, DA maps to Semester 1 on 92.9% of rows and
+  # DB to Semester 2 on 94.2%, with five rows going the other way out of
+  # ~10,700. The 749 previously unresolved rows are dual-enrolment names
+  # truncated at 29-30 characters, before the S1/S2 survived.
+  # DA/DB rules run last so an explicit S1/S2 always wins.
   term_detection:
     sources: [D_course_id, D_course_name]
     rules:
       - { pattern: 'S1\s*\*?\s*$', value: "Semester 1" }
       - { pattern: 'S2\s*\*?\s*$', value: "Semester 2" }
+      - { pattern: 'DA\s*\*?\s*$', value: "Semester 1" }
+      - { pattern: 'DB\s*\*?\s*$', value: "Semester 2" }
 
   # Handling of enrolment spells that fall outside the school-year window.
   # 188 rows produced negative days: entry dates of 1-16 July recorded against
@@ -195,11 +210,16 @@ grade_level_names:
 # hard_tolerance_pct is deliberately unset on the first pass — read the
 # distributions in the report, then choose the bounds.
 ranges:
+  # RESOLVED from the tail distribution: 35,629 rows sit above 100, but the
+  # distribution effectively ends at 110 — [105,110) holds 1,019 rows and
+  # [110,120) holds 2. Above 110 there are 16 rows in total.
+  # 110 is therefore an empirically clean cut. The raw value is preserved in
+  # D_stu_grade_raw before anything is blanked.
   D_stu_grade:
     plausible: { min: 0, max: 100 }
-    hard:      { min: 0, max: 200 }
-    hard_action: flag          # flag | na | stop
-    # hard_tolerance_pct: 0.1
+    hard:      { min: 0, max: 110 }
+    hard_action: na            # flag | na | stop
+    hard_tolerance_pct: 0.05
 
   D_creds_earn:
     plausible: { min: 0, max: 2 }
@@ -240,20 +260,24 @@ grade_tail_buckets: [100, 100.5, 101, 102, 105, 110, 120, 150, 200, 1000]
 # real. The enrolment is still real, so na is preferred to drop: the student
 # did take the course, we just cannot use the number.
 credits:
+  # RESOLVED: not an error. 95.5% of these rows are Semester 2 records where the
+  # student's Semester 1 row for the same base course earned zero - the S2
+  # record carries the recovered credit as well as its own. The earned figure
+  # is correct; flag and keep.
   earned_exceeds_attempted:
     treatment: flag              # flag | na_earned | drop
   impossible_above: 2            # earned above this is not a usable value
   impossible_treatment: na       # na | drop | keep
 
-# TERM DETECTION — candidate extra rule, under test.
-# Dual-enrolment course IDs appear as DA/DB pairs (SST5601DA / SST5601DB),
-# which may be a semester marker in a different dialect, or may be section A
-# and section B. Section 3.2a tests which. Do not enable until it is settled.
-term_detection_candidates:
-  enabled: false
-  rules:
-    - { pattern: 'DA\s*\*?\s*$', value: "Semester 1" }
-    - { pattern: 'DB\s*\*?\s*$', value: "Semester 2" }
+# COURSE NAME MARKERS
+# The asterisk marks something, and credit recovery is one case of it: 95.5% of
+# the S2 rows earning more credit than they attempted have an S1 row that
+# earned zero. But 46,780 rows carry an asterisk against only 6,889 showing
+# excess credit, so the marker is broader than recovery alone - most likely a
+# repeat or grade-replacement flag. Section 3.4 profiles it.
+# TODO confirm the meaning with the district.
+course_name_markers:
+  repeat_or_recovery_pattern: '[*]'
 
 
 # ===========================================================================
@@ -267,7 +291,19 @@ cohort:
   years_required:     4
   final_year:         2025
 
+  # DURATION
+  # basis: days  -> M_days_enrolled_year >= duration_min_days
+  #        share -> days as a share of the school-year window >= duration_min_share
+  #
+  # Tettra expresses the rule as "at least 75% of the school year", which on a
+  # 334-day window is about 250 days. The inherited 200 is roughly 60%, and for
+  # the 75.5% of rows with an imputed exit date it reduces to "enrolled on or
+  # before 12 December". Basis stays on days to preserve the current
+  # definition; switching to share applies the Tettra rule instead.
+  # TODO decide which definition the project is using, and record it.
+  duration_basis:     days           # days | share
   duration_min_days:  200
+  duration_min_share: 0.75
   duration_rule:      all_years      # all_years | bookends | none
 
   progression:
@@ -282,6 +318,39 @@ cohort:
   days_enrolled_rule: sum_of_spells  # sum_of_spells | max_spell
 
   home_school_tiebreak: prefer_included
+
+  # STARTING UNIVERSE for the attrition funnel.
+  #   entry_grade_any_school -> every student in the entry grade, district-wide
+  #   entry_grade_in_scope   -> only those whose entry-year home school is one
+  #                             of schools_to_include
+  #
+  # in_scope is the more meaningful denominator: starting district-wide makes
+  # the school criterion do two jobs at once, removing students who were never
+  # at a cohort school alongside those who left one. It also makes the Tettra
+  # retention benchmarks comparable, since those were computed on an in-scope
+  # universe.
+  #
+  # Note this uses the HOME school - the one holding the most days that year.
+  # A student splitting the entry year between an out-of-scope and an in-scope
+  # school, with more days at the former, starts outside the universe.
+  universe_rule: entry_grade_in_scope  # entry_grade_any_school | entry_grade_in_scope
+
+  # In which years the home school must be one of schools_to_include.
+  school_rule: in_scope_all_years    # in_scope_all_years | in_scope_entry_year | in_scope_any_year
+
+  # Which school a cohort student is attributed to across the whole span.
+  four_year_school_rule: most_days   # most_days | entry_year | final_year | modal
+
+  # Tettra retention benchmarks from Lubbock, for comparison at each step.
+  benchmarks:
+    step_retention_pct:     85
+    snapshot_retention_pct: 86
+
+  # Tettra says early graduates are included. This extract has no graduation
+  # indicator - only enrolment - so a three-year graduate fails the four-year
+  # rule and cannot be told apart from a student who left.
+  # TODO request a graduation date or status field from the district.
+  include_early_graduates: true
 
   # Resolved to location_id (meno) at Stage 2 and matched by code thereafter.
   # Names are the human-readable interface only.
@@ -365,11 +434,170 @@ cohort:
   credit_recovery_treatment: map_to_parent   # exclude | map_to_parent | include
 
 # ===========================================================================
+# 8b. COLLAPSING ENROLMENT SPELLS TO ONE ROW PER STUDENT-YEAR
+# ===========================================================================
+
+student_year_collapse:
+  # Which school counts as the student's school for the year.
+  home_school_rule: most_days      # most_days | first_spell | last_spell
+
+  # Applied when two schools tie on days. prefer_included breaks toward a
+  # school in schools_to_include; remaining ties fall to lowest location code,
+  # which is arbitrary but deterministic across runs.
+  tiebreak: prefer_included        # prefer_included | lowest_id | earliest
+
+  # A student flagged ELL at one school and not the other in the same year.
+  # 'any' treats the year as flagged if any spell is; 'home_school' takes the
+  # value from the home-school spell only.
+  flag_rule: any                   # any | home_school
+
+  # Grade level for the year.
+  grade_level_rule: home_school    # home_school | modal | max
+
+
+# ===========================================================================
+# 8c. COURSE CODING JOIN
+# ===========================================================================
+
+coding_join:
+  keys: [D_course_id, D_course_name]
+
+  # Rows whose ID + name pair misses may fall back to the course ID alone, but
+  # only where that ID maps to exactly one coded course. BUS3718S1 answers to
+  # four different names, so an unconditional ID fallback would hand it an
+  # arbitrary coding. Rows resolved this way are flagged.
+  fallback: id_when_unambiguous     # none | id_when_unambiguous
+
+  # Coded columns that must be present after the join, or the coded file is
+  # not what the pipeline expects.
+  required_coded_fields:
+    - C_course_subject_area
+    - C_course_subject
+    - C_course_credit_type
+    - C_course_rigor
+
+
+# ===========================================================================
+# 8d. ANALYSIS FIELDS ADDED TO THE OUTPUT
+# Computed once here, with checks, rather than recomputed in each analysis.
+# ===========================================================================
+
+analysis_fields:
+  # Grade buckets, evaluated top-down; first match wins.
+  grade_pct_buckets:
+    - { min: 90,  label: "90+" }
+    - { min: 80,  label: "80-89" }
+    - { min: 70,  label: "70-79" }
+    - { min: 60,  label: "60-69" }
+    - { min: 0,   label: "Below 60" }
+
+  # A course is failed when credit was attempted and none earned.
+  fail_rule: zero_earned_with_credit_attempted
+
+  # Credit recovery. The legacy script required a prior failed attempt AND a
+  # grade of exactly 60, which hardcodes the district's minimum passing mark.
+  # This uses the evidence instead: a later-term row earning more credit than
+  # it attempted, where the same student's earlier-term row for the same base
+  # course earned zero. That test confirmed 95.5% on Nashville.
+  credit_recovery_rule: excess_credit_after_failure
+
+
+# ===========================================================================
+# 8e. SNAPSHOT — an optional single-year selection
+# Independent of the cohort. Set enabled: false for a cohort-only project.
+# ===========================================================================
+
+snapshot:
+  enabled: true
+  year: 2025
+  grade_levels: [9, 10, 11, 12]
+
+  require_school_in_scope: true
+
+  # NOTE the legacy script compared M_days_enrolled (calendar days) against
+  # 0.75 * 180 = 135 (instructional days), which is a unit mismatch, and it
+  # computed the sum without group_by so every student received the same
+  # value. Both are corrected here; the threshold is declared plainly.
+  duration_basis:     days      # days | share | credits_attempted
+  duration_min_days:  200
+  duration_min_share: 0.75
+  credits_attempted_min: 4      # used only when duration_basis is credits_attempted
+
+
+# ===========================================================================
+# 8f. OUTPUTS
+# ===========================================================================
+
+outputs:
+  # File names carry the subfolder, matching the raw_files convention:
+  # folder_path is the district root, the name supplies the rest of the path.
+  subfolder: "/2. Processed Data/"
+
+  coded_transcript:
+    write: true
+    file_name: "mnps_transcript_coded_2122_2425.csv"
+
+    # Which rows leave the pipeline.
+    #   all                -> every transcript row (~1.5M for Nashville)
+    #   cohort_only        -> rows for cohort students
+    #   cohort_or_snapshot -> either selection, so one file serves both
+    #
+    # cohort_only also removes every orphan row as a side effect: a cohort
+    # student is enrolled in all required years by definition, so no
+    # transferred-in coursework, no missing home school, no missing
+    # demographics. Every row in the export is fully populated.
+    #
+    # The cost is that changing the cohort definition means re-running the
+    # pipeline. With the local cache that is a fast re-render, not a re-read.
+    rows: cohort_only        # all | cohort_only | cohort_or_snapshot
+
+    # Keep a cohort student's full transcript, including any year outside the
+    # cohort window. Moot for Nashville, where the data spans exactly the four
+    # cohort years, but it matters for a district supplying more years.
+    restrict_to_cohort_years: false
+
+  # THE DENOMINATOR FILE. Tettra's method keeps every student and distinguishes
+  # with a flag - "9th graders who attended a high school in the district for
+  # any amount of time: these are all the students in the data file" - and asks
+  # that the cohort be tested for comprehensiveness against that population.
+  # A cohort-only transcript cannot answer that. This can, at student-year
+  # grain, which is roughly 107k narrow rows rather than 1.5M wide ones.
+  student_year:
+    write: true
+    file_name: "mnps_student_year_2122_2425.csv"
+
+  # A convenience export of the same table filtered to the snapshot. The main
+  # table already carries C_stu_snapshot_include, so the two cannot drift.
+  snapshot:
+    write: true
+    file_name: "mnps_transcript_snapshot_2425.csv"
+
+
+# ===========================================================================
 # 9. THRESHOLDS — the numbers that trip a structural check
 # ===========================================================================
 
 thresholds:
-  min_course_coding_match_pct: 95   # TODO set once Stage 7 reports a real rate
+  # CONFIRMED at Stage 3.6: exact ID + name matching reaches 99.99% of rows
+  # (1,501,066 of 1,501,191). 99.5 leaves room for a future extract to drift
+  # without tripping on noise.
+  min_course_coding_match_pct: 99.5
+
+  # Rows whose ID+name pair misses may fall back to course ID alone, but only
+  # where that ID maps to exactly one coded course. BUS3718S1 answers to four
+  # different names, so an unconditional ID fallback would assign it an
+  # arbitrary coding.
+  coding_id_fallback: true
+
+  # Share of transcript student-YEARS that must find a demographics record.
+  # The student-year is the real join key, not the student.
+  #
+  # TODO set from evidence. The first run matched ~96.1%: 3,958 of ~101,400
+  # transcript student-years had no enrolment record. Every one of those
+  # students IS in demographics, just not for that year — consistent with
+  # transferred-in credit from a prior school. Section 4.2 profiles them.
+  # Set this once that profile is understood.
+  min_student_year_match_pct: 90
   min_student_match_pct: 99         # CONFIRMED 100% of transcript students
                                     # appear in demographics
 
@@ -378,7 +606,8 @@ thresholds:
 # 10. TRACING — students followed by hand through every stage
 # ===========================================================================
 
-# PROJECT TEAM ACTION: Identify students to trace throughout the pipeine that fit different student profiles:
+# PROJECT TEAM ACTION: Identify students to trace throughout the pipeline that
+# fit different student profiles:
 ##   -  Gen ed student: typical course progression
 ##   -  English learner
 ##   -  Student with IEP
@@ -386,6 +615,7 @@ thresholds:
 ##   -  Student with course failures and/or credit recovery courses
 ##   -  Student with work-based learning courses
 ##   -  Student with dual enrollment courses
+
 tracing:
   students:
     - 190137047

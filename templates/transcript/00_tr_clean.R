@@ -668,3 +668,98 @@ describe_tail <- function(x, breaks, label) {
            data = out, n_show = 30)
   out
 }
+
+
+# --- Cohort selection machinery ---------------------------------------------------
+
+#' Reduce a per-year condition to one verdict per student.
+#'
+#' Cohort rules are almost always "in every year" or "in the first and last
+#' year", and which one is a methodology decision rather than a fact. Keeping
+#' the reduction in one place means the choice is declared in config once and
+#' applied identically to duration, progression and school.
+#'
+#' @param by_year Data with id_col, year_col and a logical `ok` column.
+#' @param rule    all_years | bookends | none.
+#' @param years   The full set of years the cohort must span.
+#' @return tibble of id_col and `passes`.
+summarise_year_rule <- function(by_year, id_col, year_col, rule, years) {
+  years <- sort(unique(years))
+  required <- switch(rule,
+    all_years = years,
+    bookends  = c(min(years), max(years)),
+    none      = integer(0),
+    stop("Unknown year rule: ", rule, call. = FALSE))
+
+  if (length(required) == 0) {
+    return(by_year |> dplyr::distinct(dplyr::across(dplyr::all_of(id_col))) |>
+             dplyr::mutate(passes = TRUE))
+  }
+
+  by_year |>
+    dplyr::filter(.data[[year_col]] %in% required) |>
+    dplyr::group_by(dplyr::across(dplyr::all_of(id_col))) |>
+    dplyr::summarise(
+      years_present = dplyr::n_distinct(.data[[year_col]]),
+      years_ok      = sum(ok, na.rm = TRUE),
+      .groups = "drop") |>
+    dplyr::mutate(passes = years_present == length(required) &
+                    years_ok == length(required)) |>
+    dplyr::select(dplyr::all_of(id_col), passes)
+}
+
+
+#' Start an attrition funnel.
+#'
+#' Every cohort rule removes students, and a rule that removes far more than
+#' expected is the single easiest way to publish a cohort that quietly
+#' describes a narrower population than it claims to. The funnel makes each
+#' step's cost visible, in sequence, against the starting universe.
+funnel_new <- function(ids, label = "Starting universe") {
+  structure(list(
+    ids   = unique(ids),
+    start = length(unique(ids)),
+    log   = tibble::tibble(
+      step             = 1L,
+      criterion        = label,
+      students         = length(unique(ids)),
+      dropped          = NA_integer_,
+      pct_of_previous  = NA_real_,
+      pct_of_start     = 100)
+  ), class = "cohort_funnel")
+}
+
+#' Apply one criterion and record what it cost.
+#'
+#' @param passing Vector of ids that pass this criterion.
+funnel_add <- function(funnel, label, passing) {
+  before <- length(funnel$ids)
+  funnel$ids <- intersect(funnel$ids, unique(passing))
+  after  <- length(funnel$ids)
+
+  funnel$log <- dplyr::bind_rows(funnel$log, tibble::tibble(
+    step            = nrow(funnel$log) + 1L,
+    criterion       = label,
+    students        = after,
+    dropped         = before - after,
+    pct_of_previous = round(100 * after / before, 1),
+    pct_of_start    = round(100 * after / funnel$start, 1)))
+
+  chk_info(paste0("Cohort — ", label),
+           paste0(format(after, big.mark = ","), " remain (",
+                  format(before - after, big.mark = ","), " dropped, ",
+                  round(100 * after / before, 1), "% retained)"))
+  funnel
+}
+
+#' Compare each step's retention against a benchmark.
+funnel_report <- function(funnel, benchmark_pct = NULL) {
+  out <- funnel$log
+  if (!is.null(benchmark_pct)) {
+    out <- out |>
+      dplyr::mutate(vs_benchmark = dplyr::if_else(
+        is.na(pct_of_previous), NA_real_,
+        round(pct_of_previous - benchmark_pct, 1)))
+  }
+  out
+}

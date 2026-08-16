@@ -65,7 +65,7 @@ read_source <- function(key, cfg, refresh = FALSE, sheet = NULL, clean_names = T
   cpath <- file.path(dir, paste0(.slug(key), "__", .slug(basename(src$file)), ".rds"))
 
   if (file.exists(cpath) && !refresh) {
-    dat <- readRDS(cpath)
+    dat <- tibble::as_tibble(readRDS(cpath))
     chk_info(paste0("Source loaded: ", key),
              paste0(format(nrow(dat), big.mark = ","), " rows x ", ncol(dat), " cols"),
              detail = paste0("from cache, written ",
@@ -80,6 +80,12 @@ read_source <- function(key, cfg, refresh = FALSE, sheet = NULL, clean_names = T
   message("Reading from SharePoint: ", src$file, " ...")
   dat <- do.call(ers_read_sharepoint, args)
   if (clean_names) dat <- janitor::clean_names(dat)
+
+  # ers_read_sharepoint returns a data.table via fread. Coerce once, here, so
+  # nothing downstream has to know: data.table reshapes base `[` semantics and
+  # modifies some objects in place, both of which are surprises a pipeline can
+  # do without. Everything after this point is a plain tibble.
+  dat <- tibble::as_tibble(dat)
 
   saveRDS(dat, cpath)
   chk_info(paste0("Source loaded: ", key),
@@ -121,18 +127,4 @@ write_output <- function(data, file_name, cfg, to_sharepoint = TRUE, local = TRU
   chk_info(paste0("Output written: ", file_name),
            paste0(format(nrow(data), big.mark = ","), " rows x ", ncol(data), " cols"))
   invisible(data)
-}
-
-#' Write the check log next to the outputs, stamped with the run.
-write_check_log <- function(cfg, file_name = NULL, to_sharepoint = FALSE) {
-  log <- chk_log()
-  if (is.null(log) || nrow(log) == 0) {
-    warning("No checks to write.")
-    return(invisible(NULL))
-  }
-  stamp <- format(Sys.time(), "%Y%m%d_%H%M")
-  file_name <- file_name %||% paste0("check_log_", tolower(cfg$.meta$district), "_", stamp, ".csv")
-  log$district    <- cfg$district
-  log$config_md5  <- substr(cfg$.meta$md5, 1, 8)
-  write_output(log, file_name, cfg, to_sharepoint = to_sharepoint, local = TRUE)
 }
