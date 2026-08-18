@@ -33,17 +33,9 @@ consolidate_sections <- function(flagged) {
   find  <- function(x) { while (parent[x] != x) x <- parent[x]; x }
   unite <- function(a, b) { ra <- find(a); rb <- find(b); if (ra != rb) parent[rb] <<- ra }
 
-  # link sections sharing a (teacher, term-slot, period, rotation).
-  # GUARD: a MISSING teacher ("NULL" / NA / "") is not a real join key -- every
-  # no-teacher section at a slot would otherwise share one key and fuse into a
-  # single giant fake class. Give those sections a UNIQUE slotkey (their own
-  # section id) so they never unite with anything; they pass through untouched.
-  .no_teacher <- is.na(ss$D_employee_id) | ss$D_employee_id %in% c("NULL", "")
-  ss$.slotkey <- ifelse(
-    .no_teacher,
-    paste0("NOTCH|", ss$C_class_id_original),
-    paste(ss$D_employee_id, ss$C_term_exploded,
-          ss$C_period_exploded, ss$C_rotation_exploded, sep = "|"))
+  # link sections sharing a (teacher, term-slot, period, rotation)
+  ss$.slotkey <- paste(ss$D_employee_id, ss$C_term_exploded,
+                       ss$C_period_exploded, ss$C_rotation_exploded, sep = "|")
   for (grp in split(ss$C_class_id_original, ss$.slotkey)) {
     u <- unique(grp)
     if (length(u) > 1) for (b in u[-1]) unite(idx[[u[1]]], idx[[b]])
@@ -61,11 +53,8 @@ consolidate_sections <- function(flagged) {
 
   comp <- sec_mtg |>
     group_by(.comp) |>
-    summarise(n_sections = n_distinct(C_class_id_original),
-              .m_vals    = list(unique(.m)),
-              .groups    = "drop") |>
-    dplyr::mutate(merged_expr = vapply(.m_vals, serialize_meetings, character(1))) |>
-    dplyr::select(-.m_vals)
+    summarise(n_sections  = n_distinct(C_class_id_original),
+              merged_expr = serialize_meetings(unique(.m)), .groups = "drop")
 
   # anchor (location/teacher/term) per component for the CONS_ id.
   # TEACHER is part of the id here: one component is one teacher by construction,

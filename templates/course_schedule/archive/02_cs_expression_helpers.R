@@ -138,8 +138,8 @@ serialize_meetings <- function(meetings) {
                    p = suppressWarnings(as.integer(names(by_atom))), stringsAsFactors = FALSE)
   segs <- character(0); keys <- numeric(0)
   for (lab in unique(df$label)) {
-    ps <- sort(df$p[df$label == lab], na.last = NA)  # drop NAs before sort
-    if (length(ps) == 0 || any(is.na(ps))) {          # non-integer atoms: emit individually
+    ps <- sort(df$p[df$label == lab])
+    if (any(is.na(ps))) {                                  # non-integer atoms: emit individually
       for (a in df$atom[df$label == lab]) { segs <- c(segs, paste0(a, "(", lab, ")")); keys <- c(keys, Inf) }
       next
     }

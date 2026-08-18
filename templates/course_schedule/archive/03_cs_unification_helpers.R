@@ -64,24 +64,16 @@ unify_resolution <- function(resolved, unexploded, loadoff = NULL,
 
 # Verification helper (mirrors 07's row-accounting checks).
 unification_summary <- function(unified, resolved, unexploded) {
-  # ungroup first: resolved/unified often arrive still grouped from upstream
-  # dplyr, which makes distinct()/joins run per-group -- the slow path. Then use
-  # a plain vector %in% membership check instead of a semi_join (hash lookup).
-  unified    <- dplyr::ungroup(unified)
-  resolved   <- dplyr::ungroup(resolved)
-  unexploded <- dplyr::ungroup(unexploded)
-
-  resolved_ids <- unique(resolved$H_row_id_before_explosions)
-  n_matched    <- sum(unexploded$H_row_id_before_explosions %in% resolved_ids)
-  n_nondb      <- nrow(unexploded) - n_matched
-
+  n_matched <- unexploded |>
+    semi_join(distinct(resolved, H_row_id_before_explosions), by = "H_row_id_before_explosions") |>
+    nrow()
   data.frame(
     check = c("resolved (DB, exploded) rows", "unexploded records matched (went to resolution)",
               "non-DB rows appended (un-exploded)", "unified rows",
               "= resolved + non-DB?",
               "teacher-load excludes", "class-size excludes"),
-    value = c(nrow(resolved), n_matched, n_nondb, nrow(unified),
-              nrow(unified) == nrow(resolved) + n_nondb,
-              sum(unified$C_teacher_load_exclude == "Exclude", na.rm = TRUE),
-              sum(unified$C_class_size_exclude == "Exclude", na.rm = TRUE)))
+    value = c(nrow(resolved), n_matched, nrow(unexploded) - n_matched, nrow(unified),
+              nrow(unified) == nrow(resolved) + (nrow(unexploded) - n_matched),
+              sum(unified$C_teacher_load_exclude == "Exclude"),
+              sum(unified$C_class_size_exclude == "Exclude")))
 }

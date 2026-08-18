@@ -75,18 +75,14 @@ add_minutes <- function(unified, config, spec) {
 }
 
 # --- class size --------------------------------------------------------------
-# M_cls_class_size = sum of the per-student adjuster per class-slot (the hook
-# coming home). CRITICAL: reduce to ONE adjuster per student BEFORE summing --
-# a student can appear on >1 un-exploded (non-DB) row in the same class-slot, and
-# summing over rows would double-count them (size > headcount). Taking one value
-# per student (they're identical within a student-class-slot) keeps
-# M_cls_class_size <= M_cls_num_stu always. Non-DB rows have adjuster 1 = full head.
+# M_cls_class_size = sum(M_student_count_adjusted) per class-slot (the hook coming
+# home). Non-DB rows never got an adjuster -> they are 1 full head.
 add_class_size <- function(unified, config) {
   unified |>
     mutate(M_student_count_adjusted = ifelse(is.na(M_student_count_adjusted), 1, M_student_count_adjusted)) |>
     group_by(C_class_id, D_term, D_period, D_rotation) |>
-    mutate(M_cls_num_stu    = n_distinct(D_stu_id),
-           M_cls_class_size = as.numeric(sum(tapply(M_student_count_adjusted, D_stu_id, max), na.rm = TRUE)),
+    mutate(M_cls_num_stu     = n_distinct(D_stu_id),
+           M_cls_class_size  = as.numeric(sum(M_student_count_adjusted, na.rm = TRUE)),
            M_cls_class_size_diff = M_cls_num_stu - M_cls_class_size) |>
     ungroup() |>
     mutate(C_cls_class_size_bucket = .bucketize(M_cls_class_size, config$buckets$class_size))
@@ -106,25 +102,22 @@ add_teacher_metrics <- function(unified, config) {
   }
 
   # weighted periods -> utilization
-  # Sum the class weight over the teacher's DISTINCT classes. (Do NOT group by
-  # D_period/D_rotation: those are NA on non-DB rows, which collapses all of a
-  # teacher's un-exploded classes into one slot and undercounts to ~1. Consolidation
-  # already merged any teacher overlaps into a single class, so summing per distinct
-  # class needs no per-slot dedup.)
-  # NOTE: utilization is "how much of the day is this teacher SCHEDULED" -> use ALL
-  # their class-slots, NOT filtered to Include. A load-off'd teacher (whose whole
-  # assignment is one large consolidated class) is still scheduled those periods;
-  # the Include filter would wrongly give them NA utilization. The load-off flag
-  # still governs teacher LOAD / class SIZE below -- a separate question.
-  pps <- config$periods_per_school
+  fu_def    <- config$full_utilization$default
+  fu_school <- config$full_utilization$by_school
   util <- unified |>
-    group_by(C_tch_location_name, D_employee_id, C_class_id) |>
-    summarise(cls_w = max(M_cls_class_weight, na.rm = TRUE), .groups = "drop") |>
+    filter(C_teacher_load_exclude == "Include") |>
+    group_by(C_tch_location_name, D_employee_id, D_term, D_rotation, D_period) |>
+    summarise(M_teacher_class_weight = max(M_class_weight, na.rm = TRUE), .groups = "drop") |>
     group_by(C_tch_location_name, D_employee_id) |>
-    summarise(M_tch_num_periods = sum(cls_w, na.rm = TRUE), .groups = "drop") |>
+    summarise(M_tch_num_periods = sum(M_teacher_class_weight, na.rm = TRUE), .groups = "drop") |>
     mutate(C_school_total_periods = vapply(as.character(C_tch_location_name),
-             function(s) { v <- pps[[s]]; if (is.null(v)) NA_real_ else as.numeric(v) }, numeric(1)),
-           M_tch_utilization  = M_tch_num_periods / C_school_total_periods)
+             function(s) {
+               v <- fu_school[[s]]
+               if (!is.null(v)) as.numeric(v)
+               else if (!is.null(fu_def)) as.numeric(fu_def)
+               else NA_real_
+             }, numeric(1)),
+           M_tch_utilization = M_tch_num_periods / C_school_total_periods)
 
   unified <- unified |>
     left_join(util |> select(D_employee_id, C_tch_location_name,
@@ -309,44 +302,38 @@ add_teacher_flags <- function(unified) {
 # THE THREE ROLLUPS (emit the new tch/cls vocabulary; add-on fields NA if absent)
 # =============================================================================
 
-build_student_rollup <- function(unified, config) {
-  time_cols <- time_key_cols(config)
-  cols <- unique(c(
-    "D_location_name","D_stu_id","D_stu_grade","D_stu_swd_flag","D_stu_ell_flag",
-    "D_stu_poverty_flag","D_stu_demographic_flag","C_class_id","D_employee_id",
-    "D_term", time_cols, "C_course_time_of_day","C_course_subject",
-    "C_course_name","C_course_rigor","C_course_rigor_detail","C_course_subject_area",
-    "C_course_credit_type","C_course_intervention","M_meeting_minutes","M_cls_pct_ell",
-    "M_cls_pct_swd","M_class_weight","M_cls_num_stu","M_cls_class_size","C_cls_class_size_bucket",
-    "C_proficiency_ela","C_proficiency_math","C_proficiency"
-  ))
+build_student_rollup <- function(unified) {
+  cols <- c("D_location_name","D_stu_id","D_stu_grade","D_stu_swd_flag","D_stu_ell_flag",
+            "D_stu_poverty_flag","D_stu_demographic_flag","C_class_id","D_employee_id",
+            "D_term","D_rotation","D_period","C_course_time_of_day","C_course_subject",
+            "C_course_name","C_course_rigor","C_course_rigor_detail","C_course_subject_area",
+            "C_course_credit_type","C_course_intervention","M_meeting_minutes","M_cls_pct_ell",
+            "M_cls_pct_swd","M_class_weight","M_cls_num_stu","M_cls_class_size","C_cls_class_size_bucket",
+            "C_proficiency_ela","C_proficiency_math","C_proficiency")
   unified |>
-    filter(C_course_subject_area != "Untracked") |> # Detroit: ensure that CTC Placeholders make it through!
+    filter(C_course_subject_area != "Untracked") |>
     .ensure_cols(cols) |>
     distinct(across(all_of(cols)))
 }
 
-build_teacher_rollup <- function(unified, config) {
-  time_cols <- time_key_cols(config)
+build_teacher_rollup <- function(unified) {
   grp <- c("D_employee_id","C_tch_course_subject","C_tch_course_subject_area",
            "C_tch_course_credit_type","C_tch_grade","C_tch_location_name",
            "C_tch_percent_ell_classes","C_tch_percent_swd_classes","C_tch_ell_swd_flag",
            "C_tch_ell_flag","C_tch_swd_flag","C_tch_novice_indicator",
            "D_employee_license_type_rank","D_employee_license_type",
            "D_employee_license_subject_concat","C_tch_ninth_grade_flag",
-           "C_teacher_load_exclude",
            "M_tch_num_periods","M_tch_utilization","M_tch_load","M_tch_load_bucket")
   u <- unified |>
-    filter(C_course_subject_area != "Untracked") |> # Detroit: ensure that CTC Placeholders make it through!
-    .ensure_cols(c(grp, "D_meeting", time_cols))
+    filter(C_teacher_load_exclude == "Include", C_course_subject_area != "Untracked") |>
+    .ensure_cols(c(grp, "D_meeting"))
   if (all(is.na(u$D_meeting)))
     u <- u |> mutate(D_meeting = paste0(C_period_exploded, "@", C_rotation_exploded))
   u |>
     group_by(across(all_of(grp))) |>
     summarise(M_tch_num_preps = n_distinct(C_course_name),
-              M_tch_meetings_in_s1 = paste0(unique(D_meeting[D_term != "S2"]), collapse = " | "),
+              M_tch_meetings_in_s1 = paste0(unique(D_meeting[D_term != "3502"]), collapse = " | "),
               C_tch_course_names   = paste0(unique(C_course_name), collapse = " | "),
-              across(all_of(time_cols), ~ paste(sort(unique(na.omit(.))), collapse = " | ")),
               M_tch_weight = 1, .groups = "drop") |>
     arrange(desc(C_tch_location_name), desc(M_tch_utilization))
 }
@@ -354,20 +341,16 @@ build_teacher_rollup <- function(unified, config) {
 # max() that returns NA (not -Inf + warning) when every value in the group is NA
 .max_or_na <- function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)
 
-build_class_rollup <- function(unified, teacher_rollup, config) {
-  time_cols <- time_key_cols(config)
+build_class_rollup <- function(unified, teacher_rollup) {
   # class-level grain: one row per class-slot with all the class fields
-  grp <- unique(c(
-    "C_cls_location_id","C_cls_location_name","C_class_id","D_term", time_cols,
-    "C_teacher_load_exclude","C_class_size_exclude","D_employee_id",
-    "C_cls_course_subject","C_cls_course_subject_area","C_cls_course_name","C_cls_course_credit_type",
-    "C_cls_grade","C_cls_course_rigor","C_cls_course_rigor_detail",
-    "M_cls_num_ell","M_cls_num_swd","M_cls_pct_ell","M_cls_pct_swd","C_cls_ell_bucket","C_cls_swd_bucket",
-    "M_cls_num_stu","M_cls_class_size","C_cls_class_size_bucket"
-  ))
+  grp <- c("C_cls_location_id","C_cls_location_name","C_class_id","D_term","D_period","D_rotation",
+           "C_teacher_load_exclude","C_class_size_exclude","D_employee_id",
+           "C_cls_course_subject","C_cls_course_subject_area","C_cls_course_name","C_cls_course_credit_type",
+           "C_cls_grade","C_cls_course_rigor","C_cls_course_rigor_detail",
+           "M_cls_num_ell","M_cls_num_swd","M_cls_pct_ell","M_cls_pct_swd","C_cls_ell_bucket","C_cls_swd_bucket",
+           "M_cls_num_stu","M_cls_class_size","C_cls_class_size_bucket")
   base <- unified |>
     .ensure_cols(c(grp, "M_meeting_minutes", "M_cls_class_weight", "M_cls_class_weight_times_class_size")) |>
-    filter(C_class_size_exclude == "Include", C_course_subject_area != "Untracked") |>
     group_by(across(all_of(grp))) |>
     summarise(M_cls_class_weight = .max_or_na(M_cls_class_weight),
               M_meeting_minutes = .max_or_na(M_meeting_minutes),

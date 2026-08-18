@@ -224,33 +224,3 @@ render_stage <- function(stage) {
     header,
     htmltools::tags$div(style = "padding:2px 16px 10px 16px;background:#fff;", body_blocks))
 }
-
-# ============================================================================
-# NEW DISPLAY HELPER — add to your review/explore helpers.
-# One self-contained call per check: a titled gt table with an EDITABLE note
-# callout (written inline in the chunk) and an optional PASS/CHECK badge.
-# Replaces the tr_check(good=, status=, evidence=) bundling.
-# ============================================================================
-check_gt <- function(df, title, note = NULL, status = NULL) {
-  badge <- ""
-  if (!is.null(status)) badge <- switch(
-    toupper(status),
-    PASS  = " &nbsp;<span style='color:#1a7f37;font-weight:600'>&#10003; PASS</span>",
-    CHECK = " &nbsp;<span style='color:#bf8700;font-weight:600'>&#9888; CHECK</span>",
-    FAIL  = " &nbsp;<span style='color:#cf222e;font-weight:600'>&#10007; FAIL</span>",
-    "")
- 
-  g <- gt::gt(df) |>
-    gt::tab_header(
-      title    = gt::md(paste0("**", title, "**", badge)),
-      subtitle = if (!is.null(note)) gt::md(paste0("_", note, "_")) else NULL)
- 
-  g |>
-    gt::tab_options(
-      table.font.size = gt::px(12), data_row.padding = gt::px(4),
-      column_labels.font.weight = "bold", table.width = gt::pct(100),
-      heading.align = "left", heading.title.font.size = gt::px(13),
-      heading.subtitle.font.size = gt::px(11),
-      table.border.top.style = "none") |>
-    gt::opt_table_font(font = "system-ui")
-}

@@ -55,12 +55,13 @@ library(scales)
 
 ```{r setup-helpers-and-config}
 # Load helper functions for profiling/exploring data
-source(here::here("helpers", "01_cs_explore_helpers.R"))
-source(here::here("helpers", "01_cs_review_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_explore_helpers.R"))
+source(here::here("templates", "course_schedule", "helpers", "01_cs_review_helpers.R"))
 
 # Read the district config — tells us where to find files, how to rename columns, etc.
-config <- yaml::read_yaml(here::here("config", "cs_detroit.yaml"))
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
+source_of_truth_folder_path <- config$source_of_truth_folder_path
 ```
 
 ```{r subtitle}
@@ -94,8 +95,8 @@ stu_demographics <- tr_safe(ers_read_sharepoint(
 
 # Load location coding data from the Sourth of Truth folder path
 location_coding <- tr_safe(ers_read_sharepoint(
-    folder_path = raw_data_folder_path,
-    file_name_with_extension = config$coding_files$location_coding
+    folder_path = source_of_truth_folder_path,
+    file_name_with_extension = config$source_of_truth_files$location_coding
   ),
   otherwise = NULL
 )
@@ -129,7 +130,7 @@ course number.
 # ---- Which columns might represent time/scheduling? ----
 # Edit this list to match the column names you see in the profile above.
 # These are the ones we want to inspect more closely.
-peek_cols <- c("Term", "Rotation", "Period", "Expression", "Period Expression", "per", "term", "Term Abbreviation")
+peek_cols <- c("Term", "Rotation", "Period", "Expression", "Period Expression", "per", "term")
 
 peek <- peek_cols[peek_cols %in% names(cs_raw)]
 
@@ -153,7 +154,6 @@ The join source for student demographic flags (SWD, ELL, FRL). Find the column h
 that matches the student ID column in the CS profile — that's your join key.
 
 ```{r dem-profile}
-#| eval: false
 explore_gt(explore_profile(stu_demographics), "Raw student demographics — every column")
 ```
 
@@ -188,7 +188,7 @@ this chunk's `eval` to `true`.
 #| eval: true
 
 # Re-read config in case you've updated it between renders
-config <- yaml::read_yaml(here::here("config", "cs_detroit.yaml"))
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
 
 # ---- Step 1: RENAME columns ----
 # The config's "column_map" tells us which district column name maps to which
@@ -205,7 +205,7 @@ cs_prepped <- cs_raw |>
 # ---- Step 2: MERGE student demographics ----
 # Join demographic data (race, grade, SWD, ELL, FRL) onto the schedule.
 # This lets us analyze time-use patterns by student subgroup later.
-if (exists("stu_demographics") && !is.null(stu_demographics)) {
+if (exists("stu_demographics")) {
   dem_cfg <- config$stu_demographics_join
 
   # Rename demographic columns to standard names, then keep only what we need
@@ -228,7 +228,7 @@ if (exists("stu_demographics") && !is.null(stu_demographics)) {
     left_join(demographics_cleaned, by = dem_cfg$key)
 }
 # Location coding join (if available)
-if (exists("location_coding") && !is.null(location_coding)) {
+if (exists("location_coding")) {
   # Join demographics onto the course schedule by student ID
   cs_prepped <- cs_prepped |>
     left_join(location_coding, by = "D_location_id")
@@ -259,14 +259,13 @@ if (!is.null(config$intake$enrollment_type) &&
 
 # ---- Step 4: OTHER edits ----
 # eg., updating null values to 0, etc.
-# cs_prepped <- cs_prepped |>
-#   mutate(
-#     D_stu_ell_flag     = ifelse(is.na(D_stu_ell_flag),     0, D_stu_ell_flag),
-#     D_stu_swd_flag     = ifelse(is.na(D_stu_swd_flag),     0, D_stu_swd_flag),
-#     D_stu_poverty_flag = ifelse(is.na(D_stu_poverty_flag), 0, D_stu_poverty_flag),
-#     D_rotation         = "A"
-#   )
-
+cs_prepped <- cs_prepped |>
+  mutate(
+    D_stu_ell_flag     = ifelse(is.na(D_stu_ell_flag),     0, D_stu_ell_flag),
+    D_stu_swd_flag     = ifelse(is.na(D_stu_swd_flag),     0, D_stu_swd_flag),
+    D_stu_poverty_flag = ifelse(is.na(D_stu_poverty_flag), 0, D_stu_poverty_flag),
+    D_rotation         = "A"
+  )
 ```
 
 
@@ -276,23 +275,19 @@ Confirms that deduplication worked and no new duplicates were introduced by
 the demographics join or other prep steps.
 
 ```{r cs-duplicate-check-prepped}
-if (exists("cs_prepped") && !is.null(cs_prepped)) {
-  n_prepped          <- nrow(cs_prepped)
-  n_prepped_distinct <- nrow(distinct(cs_prepped))
-  n_prepped_dupes    <- n_prepped - n_prepped_distinct
+n_prepped         <- nrow(cs_prepped)
+n_prepped_distinct <- nrow(distinct(cs_prepped))
+n_prepped_dupes   <- n_prepped - n_prepped_distinct
 
-  explore_gt(
-    data.frame(
-      check = c("Total rows", "Fully distinct rows", "Duplicate rows"),
-      n     = c(n_prepped, n_prepped_distinct, n_prepped_dupes),
-      pct   = c(100, round(100 * n_prepped_distinct / n_prepped, 1),
-                     round(100 * n_prepped_dupes    / n_prepped, 1))
-    ),
-    "Duplicate check — after prep"
-  )
-} else {
-  htmltools::HTML("<em>cs_prepped not found — run the data prep steps above first.</em>")
-}
+explore_gt(
+  data.frame(
+    check = c("Total rows", "Fully distinct rows", "Duplicate rows"),
+    n     = c(n_prepped, n_prepped_distinct, n_prepped_dupes),
+    pct   = c(100, round(100 * n_prepped_distinct / n_prepped, 1),
+                   round(100 * n_prepped_dupes    / n_prepped, 1))
+  ),
+  "Duplicate check — after prep"
+)
 ```
 
 ## Reinvestigate — profile after edits
@@ -302,7 +297,7 @@ names populated, only the right schools remain, and `D_term` holds valid term
 values. Iterate the prep block until this looks right.
 
 ```{r prep-profile}
-if (exists("cs_prepped") && !is.null(cs_prepped)) {
+if (exists("cs_prepped")) {
   explore_gt(explore_profile(cs_prepped), "After prep edits — re-profiled")
 } else {
   htmltools::HTML(
@@ -315,7 +310,7 @@ if (exists("cs_prepped") && !is.null(cs_prepped)) {
 # ---- Re-inspect time columns after renaming ----
 # Now that columns have been renamed to D_ names, check that they look right.
 peek_cols <- c(
-  "D_term", "D_rotation", "D_period", "D_expression")
+  "D_term", "D_rotation", "D_period", "D_expression", "D_location_name", "D_stu_grade")
 
 if (!exists("cs_prepped")) {
   htmltools::HTML("<em>cs_prepped not found — run the data prep steps above first.</em>")
@@ -355,7 +350,7 @@ the pipeline is reusable, not one-off:
 # ---- Export the prepped data for Stage 02 ----
 # This is the handoff point: Stage 02 will pick up this file and apply
 # course coding + exclusion rules on top of it.
-if (exists("cs_prepped") && !is.null(cs_prepped)) {
+if (exists("cs_prepped")) {
   ers_write_sharepoint(
     data = cs_prepped,
     folder_path = raw_data_folder_path,
@@ -378,10 +373,7 @@ if (exists("cs_prepped") && !is.null(cs_prepped)) {
 # the coding file lives on SharePoint and gets edited directly.
 
 coding_template <- cs_prepped |>
-  group_by(
-    D_course_name,
-    D_course_id, 
-    D_course_subject_id) |> # Detroit field - SCED code
+  group_by(D_course_name, D_course_id) |>
   count() |>
   ungroup() |>
   mutate(
@@ -407,6 +399,6 @@ coding_template <- cs_prepped |>
 ers_write_sharepoint(
   data = coding_template,
   folder_path = raw_data_folder_path,
-  file_name_with_extension = "/1. Coding/To Code/cs_course_coding_template.csv"
+  file_name_with_extension = "/1. Coding/cs_course_coding_template.csv"
 )
 ```

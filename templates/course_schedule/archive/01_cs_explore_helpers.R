@@ -16,7 +16,6 @@ suppressPackageStartupMessages({
 # so this single table replaces the old separate low-cardinality dumps.
 # min/max are computed for numeric / date columns (and numeric-looking strings).
 explore_profile <- function(df, max_full = 12, n_sample = 6) {
-  if (is.null(df)) return(invisible(NULL))
   n <- nrow(df)
   rows <- lapply(names(df), function(nm) {
     x  <- df[[nm]]
@@ -59,7 +58,6 @@ explore_profile <- function(df, max_full = 12, n_sample = 6) {
 explore_value_counts <- function(df, col, top = NULL) {
   x <- df[[col]]
   t <- as.data.frame(table(value = x, useNA = "ifany"), stringsAsFactors = FALSE)
-  if (ncol(t) != 2) return(data.frame(value = character(), n = integer(), stringsAsFactors = FALSE))
   names(t) <- c(col, "n")
   t <- t[order(-t$n), , drop = FALSE]
   rownames(t) <- NULL
@@ -69,15 +67,13 @@ explore_value_counts <- function(df, col, top = NULL) {
 
 # ---- Shared table styling (same visual family as the review artifact) -------
 explore_gt <- function(df, title = NULL) {
-  if (is.null(df)) return(invisible(NULL))
   g <- gt(df)
   if (!is.null(title)) g <- tab_header(g, title = md(paste0("**", title, "**")))
   g |>
     tab_options(table.font.size = px(12), data_row.padding = px(4),
-                column_labels.font.weight = "bold", table.width = px(600),
+                column_labels.font.weight = "bold", table.width = pct(100),
                 heading.align = "left", heading.title.font.size = px(13),
-                table.border.top.style = "none",
-                quarto.use_bootstrap = FALSE) |>
+                table.border.top.style = "none") |>
     opt_table_font(font = "system-ui")
 }
 
@@ -113,8 +109,7 @@ apply_stu_snapshot <- function(df, config) {
 
 # Render a named list of frames as stacked tables.
 explore_render <- function(named_frames, prefix = "Values \u00B7 ") {
-  tables <- lapply(names(named_frames), function(nm) {
-    explore_gt(named_frames[[nm]], paste0(prefix, nm))
-  })
-  do.call(gt::gt_group, tables)
+  htmltools::tagList(lapply(names(named_frames), function(nm) {
+    htmltools::HTML(as_raw_html(explore_gt(named_frames[[nm]], paste0(prefix, nm))))
+  }))
 }
