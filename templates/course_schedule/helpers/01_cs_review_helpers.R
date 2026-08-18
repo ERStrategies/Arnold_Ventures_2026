@@ -232,6 +232,17 @@ render_stage <- function(stage) {
 # Replaces the tr_check(good=, status=, evidence=) bundling.
 # ============================================================================
 check_gt <- function(df, title, note = NULL, status = NULL) {
+
+  # Report into the shared check log so a long render ends with one summary
+  # rather than a badge you had to have been watching for. Guarded so this
+  # file still works if the log is not loaded.
+  if (exists("chk_from_badge", mode = "function")) {
+    chk_from_badge(
+      check  = title,
+      status = status,
+      value  = if (is.data.frame(df)) paste0(nrow(df), " rows") else NULL)
+  }
+
   badge <- ""
   if (!is.null(status)) badge <- switch(
     toupper(status),

@@ -60,12 +60,12 @@ teacher_hr_licensure <- function(teacher_licensure, config) {
 
 # --- mode: EXPERIENCE (years of service) -------------------------------------
 teacher_hr_experience <- function(teacher_exp, config,
-                                  years_col = "D_teacher_years_experience") {
+                                  years_col = "D_tch_yrs_experience") {
   thr <- if (!is.null(config$add_ons$teacher_hr$novice_years_threshold))
     config$add_ons$teacher_hr$novice_years_threshold else 2
   teacher_exp |>
     transmute(D_employee_id,
-              D_teacher_years_experience = .data[[years_col]],
+              D_tch_yrs_experience = .data[[years_col]],
               C_tch_novice_indicator = ifelse(.data[[years_col]] <= thr, "Novice", "Not Novice"))
 }
 

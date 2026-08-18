@@ -1,0 +1,477 @@
+---
+title: "Course Schedule Pipeline"
+date: today
+params:
+  district: "nashville"
+  refresh_raw: false      # TRUE re-reads every source from SharePoint
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    df-print: paged
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+editor: source
+---
+
+```{r setup}
+#| include: false
+knitr::opts_chunk$set(echo = TRUE)
+config <- yaml::read_yaml(
+  here::here("config", "districts", paste0("cs_", params$district, ".yaml")))
+source(here::here(config$helpers_path, "00_cs_setup.R"))
+```
+
+```{r subtitle}
+#| results: 'asis'
+#| echo: false
+cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
+```
+
+# What this file is
+
+One document, run top to bottom, replacing `01_cs_explore.qmd` and
+`02_cs_processing_and_rollups.qmd`. Those two were joined by a file —
+`01_cs_data_post_explore.csv` was written to SharePoint at the end of the first
+and read back at the start of the second. That seam is gone; the data stays in
+memory.
+
+The engine is unchanged. Every weight, explosion, flag, resolution and rollup
+still comes from `templates/course_schedule/helpers/`.
+
+**Two ways of checking, both reporting to one log.**
+
+- `check_gt()` renders a table with a PASS / CHECK badge. Most checks are this:
+  evidence to eyeball.
+- `chk_stop()` halts. Reserved for structural failures — a join that changed
+  the row count, an engine that returned nothing.
+
+Both now write to a single check log, printed at the end, so a long render
+finishes with a summary rather than a badge you had to have been watching for.
+
+**On `tr_safe()`.** It swallows any error and returns a fallback. That is right
+for an input the district may not have supplied and wrong for the engine, where
+it turned a failure into `NULL` and let every later stage degrade quietly. It is
+now `cs_optional()` for the former and `cs_require()` for the latter.
+
+| # | Stage | Replaces | Status |
+|---|-------|----------|--------|
+| 00 | Setup and config | Part 0 of both files | built |
+| 01 | Explore and prep | `01_cs_explore.qmd` | built |
+| 02 | Coding and exclusions | `02_...` §02 | next |
+| 03 | Weights, minutes, DB resolution | `02_...` §03 | |
+| 04 | Rollups and export | `02_...` §04 | |
+
+---
+
+# Stage 00 — Setup and configuration
+
+```{r cfg}
+chk_reset()
+chk_set_output_dir(file.path(cache_dir(config), "failed_checks"))
+chk_stage("Stage 00 — Setup")
+
+chk_info("District", config$district)
+chk_info("Year", config$year)
+chk_info("Time format", config$time_format)
+chk_info("Enrollment type", config$intake$enrollment_type)
+chk_info("Class ID recipe", paste(unlist(config$class_id$recipe), collapse = " + "))
+chk_info("Cache", cache_dir(config))
+```
+
+Config values the run depends on, printed so a reviewer can see the decisions
+without reading any code.
+
+```{r cfg-decisions}
+tibble::tibble(
+  setting = c("Term weights", "Rotation default", "Period default",
+              "Bell minutes default", "Coding join key",
+              "Uncoded threshold", "Teacher DB consolidate max",
+              "Self-contained threshold"),
+  value = c(
+    paste(names(config$weights$term), unlist(config$weights$term),
+          sep = "=", collapse = ", "),
+    as.character(config$weights$rotation$default),
+    as.character(config$weights$period$default),
+    as.character(config$bell_minutes$default),
+    paste(unlist(config$coding$join_key), collapse = " + "),
+    paste0(config$coding$uncoded_flag_threshold_pct, "%"),
+    as.character(config$teacher_db$consolidate_max_size),
+    paste0(config$self_contained$swd_ell_threshold_pct, "%")))
+```
+
+```{r cfg-guard}
+required <- c("district", "year", "raw_data_folder_path", "raw_files",
+              "column_map", "class_id", "time_format", "weights",
+              "bell_minutes", "coding", "exclusions")
+missing_keys <- required[!vapply(required, function(k) !is.null(config[[k]]), logical(1))]
+
+chk_stop("Config has every required section",
+         length(missing_keys) == 0,
+         detail = if (length(missing_keys) > 0)
+           paste("Missing:", paste(missing_keys, collapse = ", ")))
+
+# Assign first, then check. An assignment inside chk_stop()'s condition would
+# bind inside that function's frame, not here, and the object would vanish.
+spec         <- cs_require(expr_spec(config),         "Expression spec builds")
+term_expands <- cs_require(term_expands_spec(config), "Term expansion spec builds")
+```
+
+---
+
+# Stage 01 — Explore and prep
+
+Replaces `01_cs_explore.qmd`. Same profiling and the same prep recipe; what has
+gone is the export at the end, since Stage 02 now runs in the same session.
+
+## 1.1 Load sources
+
+Each file is read from SharePoint once and cached as `.rds`. **The cache does
+not know when the district re-sends a file** — set `refresh_raw: true` in the
+header when new data lands.
+
+The course schedule is required. Everything else is optional: a district that
+has not sent demographics or HR data should still get a render, with the gap
+reported rather than an error.
+
+```{r load}
+chk_stage("Stage 01 — Explore and prep")
+
+cs_raw <- cs_require(
+  read_source("cs_raw", config, refresh = params$refresh_raw),
+  "Course schedule loaded")
+
+stu_demographics <- cs_optional(
+  read_source("stu_demographics", config, refresh = params$refresh_raw),
+  "student demographics")
+
+teacher_hr <- cs_optional(
+  read_source("hr_raw", config, refresh = params$refresh_raw),
+  "teacher HR")
+
+location_coding <- cs_optional(
+  read_source("location_coding", config, refresh = params$refresh_raw),
+  "location coding")
+
+cs_course_coding <- cs_optional(
+  read_source("course_coding", config, refresh = params$refresh_raw),
+  "course coding")
+```
+
+## 1.2 Raw column profile
+
+Truly raw — original headers, nothing mapped. This is what the `column_map` is
+written against.
+
+```{r raw-profile}
+explore_gt(explore_profile(cs_raw), "Course schedule · raw column profile")
+```
+
+```{r raw-profile-dem}
+if (!is.null(stu_demographics))
+  explore_gt(explore_profile(stu_demographics), "Student demographics · raw")
+```
+
+```{r raw-profile-hr}
+if (!is.null(teacher_hr))
+  explore_gt(explore_profile(teacher_hr), "Teacher HR · raw")
+```
+
+## 1.3 Time columns
+
+The columns that might encode when a class meets. Getting this wrong makes
+every weight wrong, so it is worth looking rather than assuming.
+
+```{r raw-time-peek}
+time_candidates <- intersect(
+  unlist(config$column_map$course_schedule[
+    c("D_period", "D_term", "D_course_section_id")]),
+  names(cs_raw))
+
+if (length(time_candidates) > 0) {
+  explore_render(setNames(
+    lapply(time_candidates, function(cl) explore_value_counts(cs_raw, cl, top = 25)),
+    time_candidates))
+}
+```
+
+## 1.4 Duplicates in the raw file
+
+```{r raw-dupes}
+n_raw   <- nrow(cs_raw)
+n_uniq  <- nrow(dplyr::distinct(cs_raw))
+
+data.frame(
+  measure = c("Rows as received", "Distinct rows", "Exact duplicate rows"),
+  value   = c(n_raw, n_uniq, n_raw - n_uniq)
+) |>
+  check_gt(
+    title  = "1.4 · Exact duplicate rows in the raw file",
+    note   = "Fully identical rows are dropped during prep. A large count is worth asking the district about \u2014 it usually means an export ran twice or a join upstream fanned out.",
+    status = if (n_raw == n_uniq) "PASS" else "CHECK")
+```
+
+## 1.5 Prep
+
+Rename to standard names, merge demographics and location coding, apply scope,
+flag the student snapshot, and apply the derivations. Each step reports what it
+cost.
+
+### Rename
+
+```{r prep-rename}
+cs_map <- unlist(config$column_map$course_schedule)
+
+cs_prepped <- cs_raw |>
+  dplyr::rename(dplyr::any_of(cs_map)) |>
+  dplyr::select(dplyr::any_of(names(cs_map))) |>
+  dplyr::distinct()
+
+mapped   <- names(cs_map)[names(cs_map) %in% names(cs_prepped)]
+unmapped <- setdiff(names(cs_map), names(cs_prepped))
+
+data.frame(
+  standard_name   = names(cs_map),
+  district_column = unname(cs_map),
+  landed          = ifelse(names(cs_map) %in% names(cs_prepped), "yes", "MISSING")
+) |>
+  check_gt(
+    title  = "1.5a · Did every mapped column land?",
+    note   = "A MISSING row means column_map names a district column that is not in the file. Fix the map here rather than patching downstream.",
+    status = if (length(unmapped) == 0) "PASS" else "CHECK")
+
+chk_info("Rows after dropping exact duplicates",
+         paste0(format(nrow(cs_prepped), big.mark = ","), " of ",
+                format(nrow(cs_raw), big.mark = ",")))
+```
+
+### Student demographics
+
+```{r prep-demographics}
+if (!is.null(stu_demographics)) {
+  dem_cfg <- config$stu_demographics_join
+
+  demographics_cleaned <- stu_demographics |>
+    dplyr::rename(dplyr::any_of(unlist(config$column_map$demographics))) |>
+    dplyr::select(dplyr::all_of(c(dem_cfg$key, unlist(dem_cfg$brings_in)))) |>
+    dplyr::distinct()
+
+  if (!is.null(dem_cfg$recode)) {
+    for (col_name in names(dem_cfg$recode)) {
+      mapping <- dem_cfg$recode[[col_name]]
+      demographics_cleaned <- demographics_cleaned |>
+        dplyr::mutate(!!col_name := unlist(mapping)[as.character(.data[[col_name]])])
+    }
+  }
+
+  # join_checked rather than left_join: a demographics file with duplicate
+  # student rows would silently multiply the schedule, and that is exactly the
+  # kind of thing a row-count check exists to catch.
+  cs_prepped <- cs_prepped |>
+    join_checked(demographics_cleaned, by = dem_cfg$key,
+                 check = "Student demographics onto schedule")
+} else {
+  chk_info("Demographics merge skipped", "no demographics file")
+}
+```
+
+### Location coding
+
+```{r prep-location}
+if (!is.null(location_coding)) {
+  cs_prepped <- cs_prepped |>
+    join_checked(location_coding, by = "D_location_id",
+                 check = "Location coding onto schedule")
+} else {
+  chk_info("Location coding merge skipped", "no location file")
+}
+```
+
+### Scope
+
+```{r prep-scope}
+cs_prepped <- apply_scope(cs_prepped, config$scope, id_col = "D_stu_id")
+```
+
+### Student snapshot
+
+For longitudinal enrollment data, each row is flagged on whether the student
+was enrolled on that term's snapshot date. Skipped entirely for districts whose
+extract is already a snapshot.
+
+```{r prep-snapshot}
+if (!is.null(config$intake$enrollment_type) &&
+    config$intake$enrollment_type != "snapshot") {
+
+  cs_prepped <- cs_require(apply_stu_snapshot(cs_prepped, config),
+                           "Student snapshot flag applied")
+
+  cs_prepped |>
+    dplyr::count(D_term, C_stu_snapshot, name = "n_records") |>
+    tidyr::pivot_wider(names_from = C_stu_snapshot, values_from = n_records,
+                       values_fill = 0) |>
+    dplyr::mutate(snapshot_date = unlist(config$intake$snapshot_dates)[as.character(D_term)]) |>
+    check_gt(
+      title = "1.5b · Snapshot inclusion by term",
+      note  = "Each term uses its own snapshot date. A term with almost nothing included usually means the date sits outside that term's enrolment window \u2014 check it against the enter/exit distribution before trusting it.")
+} else {
+  chk_info("Snapshot flagging skipped", "extract is already a snapshot")
+}
+```
+
+### Derivations
+
+Fields the pipeline computes rather than reads. These were hardcoded in the old
+prep chunk, which put a district-specific assumption inside a file meant to be
+reusable.
+
+```{r prep-derivations}
+null_to_zero <- intersect(unlist(config$derivations$null_to_zero %||% character()),
+                          names(cs_prepped))
+
+if (length(null_to_zero) > 0) {
+  before <- vapply(null_to_zero, function(c) sum(is.na(cs_prepped[[c]])), numeric(1))
+  cs_prepped <- cs_prepped |>
+    dplyr::mutate(dplyr::across(dplyr::all_of(null_to_zero), ~ dplyr::coalesce(.x, 0)))
+  chk_info("Null flags set to zero", "see table",
+           data = tibble::tibble(column = null_to_zero, n_filled = unname(before)))
+}
+
+for (nm in names(config$derivations$constants %||% list())) {
+  cs_prepped[[nm]] <- config$derivations$constants[[nm]]
+  chk_info(paste0("Constant applied: ", nm),
+           config$derivations$constants[[nm]],
+           detail = "declared in config$derivations$constants")
+}
+```
+
+## 1.6 Duplicates after prep
+
+Confirms the merges did not fan out.
+
+```{r prep-dupes}
+n_prep  <- nrow(cs_prepped)
+n_prepu <- nrow(dplyr::distinct(cs_prepped))
+
+data.frame(
+  measure = c("Rows after prep", "Distinct rows", "Exact duplicate rows"),
+  value   = c(n_prep, n_prepu, n_prep - n_prepu)
+) |>
+  check_gt(
+    title  = "1.6 · Duplicates after prep",
+    note   = "Prep should not create duplicates. If this is non-zero when 1.4 was zero, a merge fanned out.",
+    status = if (n_prep == n_prepu) "PASS" else "CHECK")
+```
+
+```{r prep-grain}
+key_cols <- intersect(c("D_stu_id", "D_course_id", "D_course_section_id",
+                        "D_term", "D_period"), names(cs_prepped))
+
+dupe_keys <- cs_prepped |>
+  dplyr::count(dplyr::across(dplyr::all_of(key_cols)), name = "n_rows") |>
+  dplyr::filter(n_rows > 1)
+
+dupe_keys |>
+  dplyr::count(n_rows, name = "n_key_combinations") |>
+  check_gt(
+    title  = paste0("1.6b \u00B7 Rows per ", paste(key_cols, collapse = " + ")),
+    note   = "More than one row per student per section per time slot means the grain is not what the pipeline assumes. Worth understanding before class sizes are computed.",
+    status = if (nrow(dupe_keys) == 0) "PASS" else "CHECK")
+```
+
+## 1.7 Prepped profile
+
+```{r prep-profile}
+explore_gt(explore_profile(cs_prepped), "Course schedule · after prep")
+```
+
+```{r prep-time-peek}
+time_cols_now <- intersect(config$time_cols[[config$time_format]], names(cs_prepped))
+
+if (length(time_cols_now) > 0) {
+  explore_render(setNames(
+    lapply(time_cols_now, function(cl) explore_value_counts(cs_prepped, cl, top = 25)),
+    time_cols_now))
+}
+```
+
+## 1.8 Coding template
+
+The one-time bootstrap for a district with no coding file yet. Off by default;
+set `coding_template$write: true`, render once, then set it back.
+
+The columns it groups by come from config. The previous version hardcoded
+`D_course_subject_id`, a Detroit field absent from the Nashville data, so this
+chunk would have errored if it had ever been run here.
+
+```{r coding-template}
+#| eval: !expr isTRUE(config$coding_template$write)
+
+tpl_group <- intersect(unlist(config$coding_template$group_by), names(cs_prepped))
+
+chk_stop("Coding template group_by columns exist",
+         length(tpl_group) == length(unlist(config$coding_template$group_by)),
+         detail = paste("Missing:", paste(
+           setdiff(unlist(config$coding_template$group_by), names(cs_prepped)),
+           collapse = ", ")))
+
+coding_template <- cs_prepped |>
+  dplyr::distinct(dplyr::across(dplyr::all_of(tpl_group)))
+
+for (f in unlist(config$coding_template$uncoded_fields)) {
+  coding_template[[f]] <- "UNCODED"
+}
+
+chk_info("Coding template rows", nrow(coding_template))
+
+ers_write_sharepoint(
+  data = coding_template,
+  folder_path = config$raw_data_folder_path,
+  file_name_with_extension = config$coding_template$file_name)
+```
+
+## 1.9 Handoff
+
+`cs_data` is what Stage 02 picks up. In the old pipeline this was a CSV on
+SharePoint; now it is an object in memory, and the row count below is the last
+number Stage 01 is responsible for.
+
+```{r prep-handoff}
+cs_data <- cs_prepped
+
+chk_info("Stage 01 output",
+         paste0(format(nrow(cs_data), big.mark = ","), " rows x ",
+                ncol(cs_data), " cols"))
+chk_info("Distinct students",  dplyr::n_distinct(cs_data$D_stu_id))
+chk_info("Distinct teachers",  dplyr::n_distinct(cs_data$D_employee_id))
+chk_info("Distinct schools",   dplyr::n_distinct(cs_data$D_location_id))
+```
+
+---
+
+# Stage 02 — Coding and exclusions
+
+> Next step.
+
+---
+
+# Stage 03 — Weights, minutes and DB resolution
+
+---
+
+# Stage 04 — Rollups and export
+
+---
+
+# Check report
+
+```{r final-report}
+check_log <- chk_report(print_table = FALSE)
+```
+
+```{r final-table}
+check_log |> dplyr::select(seq, stage, check, severity, result, value)
+```

@@ -49,9 +49,17 @@
 district: Metro Nashville Public Schools
 year: "2024-25"
 
-# Path to the helpers folder, relative to the repo root.
-# Update this when copying the template to a different repo structure.
+# Paths to helper folders, relative to the repo root.
+# shared_helpers_path holds machinery used by every ERS pipeline (check log,
+# cached SharePoint reads, checked joins). helpers_path holds the course
+# schedule engine.
 helpers_path: "templates/course_schedule/helpers"
+shared_helpers_path: "templates/shared"
+
+# Local working locations. The cache holds student-level data, so point it at
+# somewhere covered by the data sharing agreement and keep it out of git.
+paths:
+  cache_dir: null      # null = <repo>/cache/cs_nashville
 
 # The SharePoint folder path where all data for this district lives.
 # Everything below is relative to this path.
@@ -128,6 +136,26 @@ column_map:
     D_stu_ell_flag:      ell
     D_stu_swd_flag:      sped
     D_stu_poverty_flag:  ed
+
+
+# ===========================================================================
+# SECTION 3b: DERIVATIONS — fields the pipeline computes rather than reads
+# WHEN TO FILL IN: During Stage 01, once you know what the district did and
+#   did not supply. These were previously hardcoded in the prep chunk, which
+#   meant a district-specific assumption lived in a file meant to be reusable.
+# ===========================================================================
+
+derivations:
+  # Columns to set to 0 when null. Typically demographic flags, where a blank
+  # means "not flagged" rather than "unknown".
+  null_to_zero: [D_stu_ell_flag, D_stu_swd_flag, D_stu_poverty_flag]
+
+  # Constant columns. Nashville supplied no rotation data, and every high
+  # school runs the same 7-period hybrid block with no rotation, so every
+  # meeting sits on a single rotation "A". A district with real A/B days must
+  # supply the column instead of constanting it here.
+  constants:
+    D_rotation: "A"
 
 
 # ===========================================================================
@@ -369,3 +397,70 @@ self_contained:
 buckets:
   class_size: [[0, 6], [7, 12], [13, 18], [19, 24], [25, 30], [31, 35], [36, null]]
   teacher_load: [[0, 34], [35, 74], [75, 124], [125, 199], [200, null]]
+
+add_ons:
+  teacher_hr:
+    enabled: true
+    file: "/0. Raw Data/HR_Aug2024_INDEMP.xlsx"
+    mode: "experience"  # options: licensure | experience | evaluation
+    novice_years_threshold: 2
+    column_map:
+      D_employee_id:        Empl_ID
+      D_tch_yrs_experience: Yrs_Tching_Exp
+
+  # Nashville has no course grades file for the schedule pipeline. The block is
+  # spelled out rather than absent so `enabled` reads FALSE explicitly instead
+  # of resolving to NULL. Note the coding file lives under
+  # source_of_truth_files, not raw_files - the old add-on chunk looked for
+  # config$raw_files$course_coding, which does not exist.
+  course_grades:
+    enabled: false
+    file: null
+
+
+# ===========================================================================
+# SECTION 13: CODING TEMPLATE — the one-time bootstrap
+# WHEN TO FILL IN: Only when onboarding a district that has no coding file yet.
+#   Set write: true, render once, then set it back to false.
+#
+# group_by lists the columns that identify a distinct course to be coded.
+# The previous version of this hardcoded D_course_subject_id, a Detroit field
+# that does not exist in the Nashville data, so the chunk would have errored
+# if it had ever been run here.
+# ===========================================================================
+
+coding_template:
+  write: false
+  group_by: [D_course_name, D_course_id]
+  file_name: "/1. Coding/To Code/cs_course_coding_template.csv"
+  uncoded_fields:
+    - C_course_time
+    - C_course_subject_area
+    - C_course_subject
+    - C_course_credit_type
+    - C_course_name
+    - C_course_rigor
+    - C_course_rigor_detail
+    - C_course_intervention
+    - C_course_time_of_day
+    - C_course_format
+    - C_course_pathway
+    - C_teacher_load_metric
+    - C_class_size_metric
+    - C_time_metric
+    - D_course_ell_flag
+    - D_course_swd_flag
+
+
+# ===========================================================================
+# SECTION 14: OUTPUTS
+# The intermediate 01_cs_data_post_explore.csv is gone: the stages now run in
+# one document, so there is nothing to hand off.
+# ===========================================================================
+
+outputs:
+  subfolder: "/2. Processed Data/"
+  class_rollup:   { write: true, file_name: "02_cs_class_rollup.xlsx" }
+  teacher_rollup: { write: true, file_name: "02_cs_teacher_rollup.xlsx" }
+  student_rollup: { write: true, file_name: "02_cs_student_rollup.xlsx" }
+  grades_rollup:  { write: true, file_name: "02_cs_course_grades_rollup.xlsx" }
