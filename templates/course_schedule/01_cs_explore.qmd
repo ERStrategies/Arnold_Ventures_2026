@@ -54,13 +54,15 @@ library(scales)
 ```
 
 ```{r setup-helpers-and-config}
-# Load helper functions for profiling/exploring data
-source(here::here("helpers", "01_cs_explore_helpers.R"))
-source(here::here("helpers", "01_cs_review_helpers.R"))
-
-# Read the district config — tells us where to find files, how to rename columns, etc.
-config <- yaml::read_yaml(here::here("config", "cs_detroit.yaml"))
+# Read the district config first so helpers_path is available for sourcing
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
 raw_data_folder_path <- config$raw_data_folder_path
+source_of_truth_folder_path <- config$source_of_truth_folder_path
+
+# Source helpers using the repo-agnostic path from config
+hp <- here::here(config$helpers_path)
+source(file.path(hp, "01_cs_explore_helpers.R"))
+source(file.path(hp, "01_cs_review_helpers.R"))
 ```
 
 ```{r subtitle}
@@ -94,8 +96,8 @@ stu_demographics <- tr_safe(ers_read_sharepoint(
 
 # Load location coding data from the Sourth of Truth folder path
 location_coding <- tr_safe(ers_read_sharepoint(
-    folder_path = raw_data_folder_path,
-    file_name_with_extension = config$coding_files$location_coding
+    folder_path = source_of_truth_folder_path, # ARNOLD: using Source of Truth folder path
+    file_name_with_extension = config$source_of_truth_files$location_coding # ARNOLD: using Source of Truth file path
   ),
   otherwise = NULL
 )
@@ -153,7 +155,7 @@ The join source for student demographic flags (SWD, ELL, FRL). Find the column h
 that matches the student ID column in the CS profile — that's your join key.
 
 ```{r dem-profile}
-#| eval: false
+#| eval: true
 explore_gt(explore_profile(stu_demographics), "Raw student demographics — every column")
 ```
 
@@ -188,7 +190,7 @@ this chunk's `eval` to `true`.
 #| eval: true
 
 # Re-read config in case you've updated it between renders
-config <- yaml::read_yaml(here::here("config", "cs_detroit.yaml"))
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
 
 # ---- Step 1: RENAME columns ----
 # The config's "column_map" tells us which district column name maps to which
@@ -259,13 +261,13 @@ if (!is.null(config$intake$enrollment_type) &&
 
 # ---- Step 4: OTHER edits ----
 # eg., updating null values to 0, etc.
-# cs_prepped <- cs_prepped |>
-#   mutate(
-#     D_stu_ell_flag     = ifelse(is.na(D_stu_ell_flag),     0, D_stu_ell_flag),
-#     D_stu_swd_flag     = ifelse(is.na(D_stu_swd_flag),     0, D_stu_swd_flag),
-#     D_stu_poverty_flag = ifelse(is.na(D_stu_poverty_flag), 0, D_stu_poverty_flag),
-#     D_rotation         = "A"
-#   )
+cs_prepped <- cs_prepped |>
+  mutate(
+    D_stu_ell_flag     = ifelse(is.na(D_stu_ell_flag),     0, D_stu_ell_flag),
+    D_stu_swd_flag     = ifelse(is.na(D_stu_swd_flag),     0, D_stu_swd_flag),
+    D_stu_poverty_flag = ifelse(is.na(D_stu_poverty_flag), 0, D_stu_poverty_flag),
+    D_rotation         = "A"
+  )
 
 ```
 

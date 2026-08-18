@@ -22,7 +22,11 @@ editor: source
 ```{r setup}
 #| include: false
 knitr::opts_chunk$set(echo = TRUE)
-source(here::here("templates", "transcript", "00_tr_setup.R"))
+# Bootstrap: read helpers_path directly from YAML, source setup, then load full config
+.cfg_raw     <- yaml::read_yaml(here::here("config", "districts", paste0("tr_", params$district, ".yaml")))
+.helpers_dir <- here::here(.cfg_raw$paths$helpers_path)
+source(file.path(.helpers_dir, "00_tr_setup.R"))
+config <- load_config(params$district)
 ```
 
 # What this file is

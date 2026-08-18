@@ -74,7 +74,7 @@ explore_gt <- function(df, title = NULL) {
   if (!is.null(title)) g <- tab_header(g, title = md(paste0("**", title, "**")))
   g |>
     tab_options(table.font.size = px(12), data_row.padding = px(4),
-                column_labels.font.weight = "bold", table.width = px(600),
+                column_labels.font.weight = "bold", table.width = pct(100),
                 heading.align = "left", heading.title.font.size = px(13),
                 table.border.top.style = "none",
                 quarto.use_bootstrap = FALSE) |>

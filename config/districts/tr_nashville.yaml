@@ -46,6 +46,7 @@ paths:
   cache_dir:  null
   output_dir: null
   output_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/2. Transcript/2. Processed Data"
+  helpers_path: "templates/transcript"
 
 
 # ===========================================================================

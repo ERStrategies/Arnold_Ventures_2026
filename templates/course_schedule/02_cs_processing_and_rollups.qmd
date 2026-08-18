@@ -1,5 +1,5 @@
 ---
-title: "Course Schedule Processing — 02–04 · Coding, Resolution & Rollups"
+title: "Course Schedule Processing — 02 · Coding, Resolution & Rollups"
 date: today
 format:
   html:
@@ -40,27 +40,29 @@ library(erstools)
 library(openxlsx)
 ```
 
+```{r setup-config}
+# Read config first so helpers_path is available for sourcing below
+config <- yaml::read_yaml(here::here("config", "districts", "cs_nashville.yaml"))
+```
+
 ```{r setup-helpers}
-# Load helper functions shared across stages
-source(here::here("helpers", "01_cs_explore_helpers.R"))
-source(here::here("helpers", "01_cs_review_helpers.R"))
-source(here::here("helpers", "02_cs_db_helpers.R"))
-source(here::here("helpers", "02_cs_expression_helpers.R"))
-source(here::here("helpers", "03_cs_resolution_helpers.R"))
-source(here::here("helpers", "03_cs_weight_helpers.R"))
-source(here::here("helpers", "03_cs_explosion_helpers.R"))
-source(here::here("helpers", "03_cs_flagging_helpers.R"))
-source(here::here("helpers", "03_cs_consolidation_helpers.R"))
-source(here::here("helpers", "03_cs_resolution_helpers.R"))
-source(here::here("helpers", "03_cs_unification_helpers.R"))
-source(here::here("helpers", "04_cs_rollup_helpers.R"))
+# Source helpers using the repo-agnostic path from config
+hp <- here::here(config$helpers_path)
+source(file.path(hp, "01_cs_explore_helpers.R"))
+source(file.path(hp, "01_cs_review_helpers.R"))
+source(file.path(hp, "02_cs_db_helpers.R"))
+source(file.path(hp, "02_cs_expression_helpers.R"))
+source(file.path(hp, "03_cs_resolution_helpers.R"))
+source(file.path(hp, "03_cs_weight_helpers.R"))
+source(file.path(hp, "03_cs_explosion_helpers.R"))
+source(file.path(hp, "03_cs_flagging_helpers.R"))
+source(file.path(hp, "03_cs_consolidation_helpers.R"))
+source(file.path(hp, "03_cs_resolution_helpers.R"))
+source(file.path(hp, "03_cs_unification_helpers.R"))
+source(file.path(hp, "04_cs_rollup_helpers.R"))
 ```
 
 ```{r setup-config-and-data}
-# Read the district configuration file
-config <- yaml::read_yaml(here::here("config", "cs_detroit.yaml"))
-raw_data_folder_path <- config$raw_data_folder_path
-
 # Expression spec and term expansion (needed for weights + resolution)
 spec         <- tr_safe(expr_spec(config), NULL)
 term_expands <- tr_safe(term_expands_spec(config), NULL)
@@ -74,7 +76,7 @@ cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
 # Connect to SharePoint
 orgfiles_site  <- get_sharepoint_site(site_url = "https://erstrategies1.sharepoint.com/sites/orgfiles")
 internal_drive <- orgfiles_site$get_drive("Internal")
-
+raw_data_folder_path <- config$raw_data_folder_path
 # Load Stage 01 output
 cs_data <- ers_read_sharepoint(
   folder_path = raw_data_folder_path,
@@ -83,8 +85,8 @@ cs_data <- ers_read_sharepoint(
 
 # Load course coding lookup
 cs_course_coding <- tr_safe(ers_read_sharepoint(
-    folder_path = raw_data_folder_path,
-    file_name_with_extension = config$coding_files$course_coding
+    folder_path = source_of_truth_folder_path, # ARNOLD: using Source of Truth folder path
+    file_name_with_extension = config$source_of_truth_files$course_coding # ARNOLD: using Source of Truth file path
   ),
   otherwise = NULL
 )
@@ -766,8 +768,8 @@ put <- function(data, name)
   ers_write_sharepoint(data = data, folder_path = out_folder,
                        file_name_with_extension = paste0("/2. Processed Data/", name, ".xlsx"))
 
-put(class_rollup,   "04_cs_class_rollup")
-put(teacher_rollup, "04_cs_teacher_rollup")
-put(student_rollup, "04_cs_student_rollup")
-if (!is.null(grades_rollup)) put(grades_rollup, "04_cs_course_grades_rollup")
+put(class_rollup,   "02_cs_class_rollup")
+put(teacher_rollup, "02_cs_teacher_rollup")
+put(student_rollup, "02_cs_student_rollup")
+if (!is.null(grades_rollup)) put(grades_rollup, "02_cs_course_grades_rollup")
 ```

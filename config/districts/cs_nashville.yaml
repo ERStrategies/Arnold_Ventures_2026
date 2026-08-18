@@ -49,6 +49,10 @@
 district: Metro Nashville Public Schools
 year: "2024-25"
 
+# Path to the helpers folder, relative to the repo root.
+# Update this when copying the template to a different repo structure.
+helpers_path: "templates/course_schedule/helpers"
+
 # The SharePoint folder path where all data for this district lives.
 # Everything below is relative to this path.
 raw_data_folder_path: "Other/Arnold Ventures/2026 Pathways ROI Tools/1. Data & Analysis - Secure/1. For Positron/1. Nashville/1. Course Schedule"
