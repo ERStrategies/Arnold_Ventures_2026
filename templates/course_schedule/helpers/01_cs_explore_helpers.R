@@ -61,7 +61,7 @@ explore_value_counts <- function(df, col, top = NULL) {
   t <- as.data.frame(table(value = x, useNA = "ifany"), stringsAsFactors = FALSE)
   if (ncol(t) != 2) return(data.frame(value = character(), n = integer(), stringsAsFactors = FALSE))
   names(t) <- c(col, "n")
-  t <- t[order(-t$n), , drop = FALSE]
+  t <- t[order(t[[1]]), , drop = FALSE]
   rownames(t) <- NULL
   if (!is.null(top)) t <- utils::head(t, top)
   t

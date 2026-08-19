@@ -3,7 +3,7 @@ title: "Course Schedule Pipeline"
 date: today
 params:
   district: "nashville"
-  refresh_raw: false      # TRUE re-reads every source from SharePoint
+  refresh_raw: false      # TRUE re-reads every source from SharePoint; FALSE uses cached .rds files
 format:
   html:
     toc: true
@@ -20,15 +20,18 @@ editor: source
 ```{r setup}
 #| include: false
 knitr::opts_chunk$set(echo = TRUE)
-config <- yaml::read_yaml(
-  here::here("config", "districts", paste0("cs_", params$district, ".yaml")))
+# params exists only during a Quarto render. Running chunks interactively in
+# Positron has no params object, so default it here and interactive runs
+# behave the same as a render.
+if (!exists("params")) {params <- list(district = "nashville", refresh_raw = FALSE)}
+config <- yaml::read_yaml(here::here("config", "districts", paste0("cs_", params$district, ".yaml")))
 source(here::here(config$helpers_path, "00_cs_setup.R"))
 ```
 
 ```{r subtitle}
 #| results: 'asis'
 #| echo: false
-cat(glue::glue("\n## {config$district} · {config$year}\n\n"))
+cat(glue("\n## {config$district} · {config$year}\n\n"))
 ```
 
 # What this file is
@@ -52,6 +55,10 @@ still comes from `templates/course_schedule/helpers/`.
 Both now write to a single check log, printed at the end, so a long render
 finishes with a summary rather than a badge you had to have been watching for.
 
+**No namespace prefixes.** Packages are attached in `00_cs_setup.R`, tidyverse
+last so dplyr wins any collision with data.table. If you add a package, add it
+there rather than reaching for `pkg::` inline.
+
 **On `tr_safe()`.** It swallows any error and returns a fallback. That is right
 for an input the district may not have supplied and wrong for the engine, where
 it turned a failure into `NULL` and let every later stage degrade quietly. It is
@@ -61,9 +68,9 @@ now `cs_optional()` for the former and `cs_require()` for the latter.
 |---|-------|----------|--------|
 | 00 | Setup and config | Part 0 of both files | built |
 | 01 | Explore and prep | `01_cs_explore.qmd` | built |
-| 02 | Coding and exclusions | `02_...` §02 | next |
-| 03 | Weights, minutes, DB resolution | `02_...` §03 | |
-| 04 | Rollups and export | `02_...` §04 | |
+| 02 | Coding and exclusions | `02_...` §02 | built |
+| 03 | Weights, minutes, DB resolution | `02_...` §03 | built |
+| 04 | Rollups and export | `02_...` §04 | built |
 
 ---
 
@@ -71,7 +78,6 @@ now `cs_optional()` for the former and `cs_require()` for the latter.
 
 ```{r cfg}
 chk_reset()
-chk_set_output_dir(file.path(cache_dir(config), "failed_checks"))
 chk_stage("Stage 00 — Setup")
 
 chk_info("District", config$district)
@@ -80,13 +86,28 @@ chk_info("Time format", config$time_format)
 chk_info("Enrollment type", config$intake$enrollment_type)
 chk_info("Class ID recipe", paste(unlist(config$class_id$recipe), collapse = " + "))
 chk_info("Cache", cache_dir(config))
+
+cs_set_run_through(config)
+```
+
+## Config readiness
+
+The config is filled in over several sittings, because you cannot write a
+column map before you have seen the columns or choose a teacher-HR mode before
+you know what the HR file contains. This says which tiers are done.
+
+**Stage 01 runs no matter what is blank.** Later tiers gate the stages that
+need them.
+
+```{r cfg-readiness}
+explore_gt(config_readiness(config), "Config readiness")
 ```
 
 Config values the run depends on, printed so a reviewer can see the decisions
 without reading any code.
 
 ```{r cfg-decisions}
-tibble::tibble(
+tibble(
   setting = c("Term weights", "Rotation default", "Period default",
               "Bell minutes default", "Coding join key",
               "Uncoded threshold", "Teacher DB consolidate max",
@@ -104,7 +125,7 @@ tibble::tibble(
 ```
 
 ```{r cfg-guard}
-required <- c("district", "year", "raw_data_folder_path", "raw_files",
+required <- c("district", "year", "sources",
               "column_map", "class_id", "time_format", "weights",
               "bell_minutes", "coding", "exclusions")
 missing_keys <- required[!vapply(required, function(k) !is.null(config[[k]]), logical(1))]
@@ -141,24 +162,19 @@ reported rather than an error.
 chk_stage("Stage 01 — Explore and prep")
 
 cs_raw <- cs_require(
-  read_source("cs_raw", config, refresh = params$refresh_raw),
+  read_source("course_schedule", config, refresh = params$refresh_raw),
   "Course schedule loaded")
 
 stu_demographics <- cs_optional(
-  read_source("stu_demographics", config, refresh = params$refresh_raw),
-  "student demographics")
-
+  read_source("demographics",    config, refresh = params$refresh_raw), "demographics")
 teacher_hr <- cs_optional(
-  read_source("hr_raw", config, refresh = params$refresh_raw),
-  "teacher HR")
-
+  read_source("teacher_hr",      config, refresh = params$refresh_raw), "teacher HR")
+course_grades_raw <- cs_optional(
+  read_source("course_grades",   config, refresh = params$refresh_raw), "course grades")
 location_coding <- cs_optional(
-  read_source("location_coding", config, refresh = params$refresh_raw),
-  "location coding")
-
+  read_source("location_coding", config, refresh = params$refresh_raw), "location coding")
 cs_course_coding <- cs_optional(
-  read_source("course_coding", config, refresh = params$refresh_raw),
-  "course coding")
+  read_source("course_coding",   config, refresh = params$refresh_raw), "course coding")
 ```
 
 ## 1.2 Raw column profile
@@ -178,6 +194,49 @@ if (!is.null(stu_demographics))
 ```{r raw-profile-hr}
 if (!is.null(teacher_hr))
   explore_gt(explore_profile(teacher_hr), "Teacher HR · raw")
+```
+
+```{r raw-profile-grades}
+if (!is.null(course_grades_raw))
+  explore_gt(explore_profile(course_grades_raw), "Course grades · raw")
+```
+
+### Add-on files get renamed here too
+
+The HR column map used to sit inside `add_ons`, where nothing read it — the
+file went to the add-on with its original headers and the helper looked for a
+`D_` column that had never been created. Both add-on files now rename on the
+same path as everything else, which is what makes them visible during
+exploration rather than at Stage 04.
+
+```{r prep-addon-renames}
+if (run_stage("01")) {
+  if (!is.null(teacher_hr) && length(config$column_map$teacher_hr) > 0) {
+    hr_map <- unlist(config$column_map$teacher_hr)
+    teacher_hr <- teacher_hr |> rename(any_of(hr_map))
+
+    # Coerce employee ID to match the type in the course schedule (numeric)
+    if ("D_employee_id" %in% names(teacher_hr))
+      teacher_hr <- teacher_hr |> mutate(D_employee_id = as.numeric(D_employee_id))
+
+    landed <- names(hr_map)[names(hr_map) %in% names(teacher_hr)]
+    data.frame(
+      standard_name   = names(hr_map),
+      district_column = unname(hr_map),
+      landed          = ifelse(names(hr_map) %in% names(teacher_hr), "yes", "MISSING")
+    ) |>
+      check_gt(
+        title  = "1.2a · Teacher HR column map",
+        note   = glue("Mode is '{config$add_ons$teacher_hr$mode}'. Experience mode needs D_employee_id and D_tch_yrs_experience; licensure needs D_employee_license_type and D_employee_license_subject; evaluation needs D_employee_rating."),
+        status = if (length(landed) == length(hr_map)) "PASS" else "CHECK")
+  }
+
+  if (!is.null(course_grades_raw) && length(config$column_map$course_grades) > 0) {
+    cg_map <- unlist(config$column_map$course_grades)
+    course_grades_raw <- course_grades_raw |> rename(any_of(cg_map))
+    chk_info("Course grades renamed", paste(names(cg_map), collapse = ", "))
+  }
+}
 ```
 
 ## 1.3 Time columns
@@ -201,17 +260,19 @@ if (length(time_candidates) > 0) {
 ## 1.4 Duplicates in the raw file
 
 ```{r raw-dupes}
-n_raw   <- nrow(cs_raw)
-n_uniq  <- nrow(dplyr::distinct(cs_raw))
+if (run_stage("01")) {
+  n_raw   <- nrow(cs_raw)
+  n_uniq  <- nrow(distinct(cs_raw))
 
-data.frame(
-  measure = c("Rows as received", "Distinct rows", "Exact duplicate rows"),
-  value   = c(n_raw, n_uniq, n_raw - n_uniq)
-) |>
-  check_gt(
-    title  = "1.4 · Exact duplicate rows in the raw file",
-    note   = "Fully identical rows are dropped during prep. A large count is worth asking the district about \u2014 it usually means an export ran twice or a join upstream fanned out.",
-    status = if (n_raw == n_uniq) "PASS" else "CHECK")
+  data.frame(
+    measure = c("Rows as received", "Distinct rows", "Exact duplicate rows"),
+    value   = c(n_raw, n_uniq, n_raw - n_uniq)
+  ) |>
+    check_gt(
+      title  = "1.4 · Exact duplicate rows in the raw file",
+      note   = "Fully identical rows are dropped during prep. A large count is worth asking the district about \u2014 it usually means an export ran twice or a join upstream fanned out.",
+      status = if (n_raw == n_uniq) "PASS" else "CHECK")
+}
 ```
 
 ## 1.5 Prep
@@ -226,9 +287,9 @@ cost.
 cs_map <- unlist(config$column_map$course_schedule)
 
 cs_prepped <- cs_raw |>
-  dplyr::rename(dplyr::any_of(cs_map)) |>
-  dplyr::select(dplyr::any_of(names(cs_map))) |>
-  dplyr::distinct()
+  rename(any_of(cs_map)) |>
+  select(any_of(names(cs_map))) |>
+  distinct()
 
 mapped   <- names(cs_map)[names(cs_map) %in% names(cs_prepped)]
 unmapped <- setdiff(names(cs_map), names(cs_prepped))
@@ -255,15 +316,15 @@ if (!is.null(stu_demographics)) {
   dem_cfg <- config$stu_demographics_join
 
   demographics_cleaned <- stu_demographics |>
-    dplyr::rename(dplyr::any_of(unlist(config$column_map$demographics))) |>
-    dplyr::select(dplyr::all_of(c(dem_cfg$key, unlist(dem_cfg$brings_in)))) |>
-    dplyr::distinct()
+    rename(any_of(unlist(config$column_map$demographics))) |>
+    select(all_of(c(dem_cfg$key, unlist(dem_cfg$brings_in)))) |>
+    distinct()
 
   if (!is.null(dem_cfg$recode)) {
     for (col_name in names(dem_cfg$recode)) {
       mapping <- dem_cfg$recode[[col_name]]
       demographics_cleaned <- demographics_cleaned |>
-        dplyr::mutate(!!col_name := unlist(mapping)[as.character(.data[[col_name]])])
+        mutate(!!col_name := unlist(mapping)[as.character(.data[[col_name]])])
     }
   }
 
@@ -310,10 +371,10 @@ if (!is.null(config$intake$enrollment_type) &&
                            "Student snapshot flag applied")
 
   cs_prepped |>
-    dplyr::count(D_term, C_stu_snapshot, name = "n_records") |>
-    tidyr::pivot_wider(names_from = C_stu_snapshot, values_from = n_records,
-                       values_fill = 0) |>
-    dplyr::mutate(snapshot_date = unlist(config$intake$snapshot_dates)[as.character(D_term)]) |>
+    count(D_term, C_stu_snapshot, name = "n_records") |>
+    pivot_wider(names_from = C_stu_snapshot, values_from = n_records,
+                values_fill = 0) |>
+    mutate(snapshot_date = unlist(config$intake$snapshot_dates)[as.character(D_term)]) |>
     check_gt(
       title = "1.5b · Snapshot inclusion by term",
       note  = "Each term uses its own snapshot date. A term with almost nothing included usually means the date sits outside that term's enrolment window \u2014 check it against the enter/exit distribution before trusting it.")
@@ -335,9 +396,9 @@ null_to_zero <- intersect(unlist(config$derivations$null_to_zero %||% character(
 if (length(null_to_zero) > 0) {
   before <- vapply(null_to_zero, function(c) sum(is.na(cs_prepped[[c]])), numeric(1))
   cs_prepped <- cs_prepped |>
-    dplyr::mutate(dplyr::across(dplyr::all_of(null_to_zero), ~ dplyr::coalesce(.x, 0)))
+    mutate(across(all_of(null_to_zero), ~ coalesce(.x, 0)))
   chk_info("Null flags set to zero", "see table",
-           data = tibble::tibble(column = null_to_zero, n_filled = unname(before)))
+           data = tibble(column = null_to_zero, n_filled = unname(before)))
 }
 
 for (nm in names(config$derivations$constants %||% list())) {
@@ -353,33 +414,37 @@ for (nm in names(config$derivations$constants %||% list())) {
 Confirms the merges did not fan out.
 
 ```{r prep-dupes}
-n_prep  <- nrow(cs_prepped)
-n_prepu <- nrow(dplyr::distinct(cs_prepped))
+if (run_stage("01")) {
+  n_prep  <- nrow(cs_prepped)
+  n_prepu <- nrow(distinct(cs_prepped))
 
-data.frame(
-  measure = c("Rows after prep", "Distinct rows", "Exact duplicate rows"),
-  value   = c(n_prep, n_prepu, n_prep - n_prepu)
-) |>
-  check_gt(
-    title  = "1.6 · Duplicates after prep",
-    note   = "Prep should not create duplicates. If this is non-zero when 1.4 was zero, a merge fanned out.",
-    status = if (n_prep == n_prepu) "PASS" else "CHECK")
+  data.frame(
+    measure = c("Rows after prep", "Distinct rows", "Exact duplicate rows"),
+    value   = c(n_prep, n_prepu, n_prep - n_prepu)
+  ) |>
+    check_gt(
+      title  = "1.6 · Duplicates after prep",
+      note   = "Prep should not create duplicates. If this is non-zero when 1.4 was zero, a merge fanned out.",
+      status = if (n_prep == n_prepu) "PASS" else "CHECK")
+}
 ```
 
 ```{r prep-grain}
-key_cols <- intersect(c("D_stu_id", "D_course_id", "D_course_section_id",
-                        "D_term", "D_period"), names(cs_prepped))
+if (run_stage("01")) {
+  key_cols <- intersect(c("D_stu_id", "D_course_id", "D_course_section_id",
+                          "D_term", "D_period"), names(cs_prepped))
 
-dupe_keys <- cs_prepped |>
-  dplyr::count(dplyr::across(dplyr::all_of(key_cols)), name = "n_rows") |>
-  dplyr::filter(n_rows > 1)
+  dupe_keys <- cs_prepped |>
+    count(across(all_of(key_cols)), name = "n_rows") |>
+    filter(n_rows > 1)
 
-dupe_keys |>
-  dplyr::count(n_rows, name = "n_key_combinations") |>
-  check_gt(
-    title  = paste0("1.6b \u00B7 Rows per ", paste(key_cols, collapse = " + ")),
-    note   = "More than one row per student per section per time slot means the grain is not what the pipeline assumes. Worth understanding before class sizes are computed.",
-    status = if (nrow(dupe_keys) == 0) "PASS" else "CHECK")
+  dupe_keys |>
+    count(n_rows, name = "n_key_combinations") |>
+    check_gt(
+      title  = paste0("1.6b \u00B7 Rows per ", paste(key_cols, collapse = " + ")),
+      note   = "More than one row per student per section per time slot means the grain is not what the pipeline assumes. Worth understanding before class sizes are computed.",
+      status = if (nrow(dupe_keys) == 0) "PASS" else "CHECK")
+}
 ```
 
 ## 1.7 Prepped profile
@@ -419,7 +484,7 @@ chk_stop("Coding template group_by columns exist",
            collapse = ", ")))
 
 coding_template <- cs_prepped |>
-  dplyr::distinct(dplyr::across(dplyr::all_of(tpl_group)))
+  distinct(across(all_of(tpl_group)))
 
 for (f in unlist(config$coding_template$uncoded_fields)) {
   coding_template[[f]] <- "UNCODED"
@@ -429,7 +494,7 @@ chk_info("Coding template rows", nrow(coding_template))
 
 ers_write_sharepoint(
   data = coding_template,
-  folder_path = config$raw_data_folder_path,
+  folder_path = config$folders$raw,
   file_name_with_extension = config$coding_template$file_name)
 ```
 
@@ -442,36 +507,927 @@ number Stage 01 is responsible for.
 ```{r prep-handoff}
 cs_data <- cs_prepped
 
-chk_info("Stage 01 output",
-         paste0(format(nrow(cs_data), big.mark = ","), " rows x ",
-                ncol(cs_data), " cols"))
-chk_info("Distinct students",  dplyr::n_distinct(cs_data$D_stu_id))
-chk_info("Distinct teachers",  dplyr::n_distinct(cs_data$D_employee_id))
-chk_info("Distinct schools",   dplyr::n_distinct(cs_data$D_location_id))
+data.frame(
+  measure = c("Rows", "Columns", "Distinct students", "Distinct teachers", "Distinct schools"),
+  value   = c(format(nrow(cs_data), big.mark = ","),
+              ncol(cs_data),
+              format(n_distinct(cs_data$D_stu_id), big.mark = ","),
+              format(n_distinct(cs_data$D_employee_id), big.mark = ","),
+              format(n_distinct(cs_data$D_location_id), big.mark = ","))
+) |>
+  check_gt(title = "1.9 · Stage 01 handoff summary")
 ```
 
 ---
 
 # Stage 02 — Coding and exclusions
 
-> Next step.
+Merges the coded course file onto the schedule, applies the exclusion rules,
+and builds the class ID. Everything downstream depends on these three, so this
+is where the gates are strictest.
+
+## 2.0 Exclusion logic
+
+A record is excluded from a metric if **any** rule for that metric matches it.
+Rules naming a column that does not exist are skipped rather than erroring, so
+a district missing an optional coded field still runs.
+
+```{r 02-exclusion-fn}
+if (run_stage("02")) {
+  chk_stage("Stage 02 — Coding and exclusions")
+
+  apply_exclusions <- function(df, rules) {
+    for (field in names(rules)) {
+      should_exclude <- rep(FALSE, nrow(df))
+
+      for (rule in rules[[field]]) {
+        if (!rule$col %in% names(df)) next
+
+        column_values <- df[[rule$col]]
+        rule_values   <- rule$val
+
+        matches_rule <- switch(
+          rule$op,
+          eq     = column_values == rule_values,
+          ne     = column_values != rule_values,
+          `in`   = column_values %in% rule_values,
+          not_in = !(column_values %in% rule_values),
+          rep(FALSE, length(column_values)))
+
+        matches_rule[is.na(matches_rule)] <- FALSE
+        should_exclude <- should_exclude | matches_rule
+      }
+
+      df[[field]] <- ifelse(should_exclude, "Exclude", "Include")
+    }
+    df
+  }
+}
+```
+
+## 2.1 Merge the coding file
+
+The coding key has to be unique or the join multiplies the schedule, and the
+row count has to hold. Both are structural, so `join_checked()` stops rather
+than reporting. Unmatched courses are expected and get reported instead — those
+are courses that still need coding.
+
+```{r 02-merge-coding}
+if (run_stage("02")) {
+  join_key <- if (!is.null(config$coding$join_key))
+    unlist(config$coding$join_key) else "D_course_name"
+
+  chk_stop("Coding file is available", !is.null(cs_course_coding),
+           detail = "Stage 01 could not read it; see the Stage 01 log")
+
+  coded_cols <- setdiff(names(cs_course_coding), join_key)
+
+  cs_data <- cs_data |>
+    select(-any_of(coded_cols)) |>
+    join_checked(cs_course_coding, by = join_key,
+                 check = "Course coding onto schedule")
+
+  unmatched_courses <- cs_data |>
+    filter(is.na(.data[[coded_cols[1]]])) |>
+    distinct(across(all_of(join_key))) |>
+    arrange(across(all_of(join_key)))
+
+  merge_diag <- list(
+    key         = paste(join_key, collapse = " + "),
+    n_unmatched = sum(is.na(cs_data[[coded_cols[1]]])),
+    unmatched_courses = as.data.frame(unmatched_courses))
+
+  chk_info("Course rows with no coding", merge_diag$n_unmatched)
+}
+```
+
+```{r 02-apply-exclusions}
+if (run_stage("02")) {
+  cs_data <- apply_exclusions(cs_data, config$exclusions)
+
+  for (field in names(config$exclusions)) {
+    if (field %in% names(cs_data)) {
+      chk_info(paste0("Exclusion rule: ", field),
+               paste0(format(sum(cs_data[[field]] == "Exclude"), big.mark = ","),
+                      " of ", format(nrow(cs_data), big.mark = ","), " excluded (",
+                      round(100 * mean(cs_data[[field]] == "Exclude"), 1), "%)"))
+    }
+  }
+}
+```
+
+```{r 02-class-id}
+if (run_stage("02")) {
+  cs_data$C_class_id <- cs_require(
+    build_class_id(cs_data, config$class_id$recipe),
+    "Class ID built", min_rows = 0)
+
+  has_cols <- function(...) all(c(...) %in% names(cs_data))
+
+  chk_info("Distinct classes", n_distinct(cs_data$C_class_id))
+
+  # Hoisted out of check 2.2, which is display-gated: an object several checks
+  # depend on cannot live inside a chunk that may not run.
+  time_cols <- config$time_cols[[config$time_format]]
+}
+```
+
+```{r}
+#| output: asis
+#| echo: false
+cs_heading("02", "## 2.2 Checks")
+```
+
+```{r}
+#| label: chk-2.0
+if (run_stage("02")) {
+  expected_fields <- names(config$column_map$course_schedule)
+  data.frame(
+    field   = expected_fields,
+    present = ifelse(expected_fields %in% names(cs_data), "yes", "MISSING")
+  ) |>
+    check_gt(
+      title  = "2.0 \u00B7 Did standardization from Stage 01 land?",
+      note   = "Every field in column_map should be present with its D_ name. If one shows MISSING, fix the rename map in Stage 01 \u2014 don't patch it downstream.",
+      status = if (length(setdiff(expected_fields, names(cs_data))) == 0) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-2.1
+if (run_stage("02")) {
+  cs_data |>
+    count(D_term, name = "n_records") |>
+    arrange(D_term) |>
+    mutate(weight = sapply(as.character(D_term), \(t) {
+      w <- config$weights$term[[t]]; if (is.null(w)) "MISSING from config" else as.character(w) })) |>
+    check_gt(
+      title  = "2.1 \u00B7 Term structure \u2014 is every term value weightable?",
+      note   = "Every term in the data needs a configured weight. If any shows MISSING from config, add it to weights.term.",
+      status = if (all(as.character(unique(na.omit(cs_data$D_term))) %in% names(config$weights$term))) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-2.2
+if (run_stage("02")) {
+  included_data <- cs_data
+  if (has_cols("C_course_time_exclude", "C_class_size_and_teacher_load_exclude"))
+    included_data <- included_data |>
+      filter(C_course_time_exclude == "Include",
+             C_class_size_and_teacher_load_exclude == "Include")
+
+  records_per_student <- included_data |>
+    count(D_location_name, D_stu_id, name = "records_per_student")
+
+  included_data |>
+    group_by(D_location_name) |>
+    summarise(n_students = n_distinct(D_stu_id), n_teachers = n_distinct(D_employee_id),
+              terms = paste(sort(unique(na.omit(D_term))), collapse = ", "),
+              n_time_slots = n_distinct(!!!syms(time_cols)), .groups = "drop") |>
+    left_join(records_per_student |> group_by(D_location_name) |>
+                summarise(avg_records_per_student = round(mean(records_per_student), 1),
+                          .groups = "drop"),
+              by = "D_location_name") |>
+    arrange(D_location_name) |>
+    check_gt(
+      title = "2.2 \u00B7 Records per student, by school",
+      note  = "Per-school record counts and time-slot variety should look plausible for HS schedules. A school far off the others is worth a look.")
+}
+```
+
+```{r}
+#| label: chk-2.3
+if (run_stage("02")) {
+  demographic_fields <- unlist(config$stu_demographics_join$brings_in)
+  data.frame(
+    field      = demographic_fields,
+    present    = ifelse(demographic_fields %in% names(cs_data), "yes", "no"),
+    pct_filled = vapply(demographic_fields, function(f)
+      if (f %in% names(cs_data)) round(100 * mean(!is.na(cs_data[[f]])), 1) else NA_real_,
+      numeric(1))
+  ) |>
+    check_gt(
+      title  = "2.3 \u00B7 Student demographics \u2014 present and populated?",
+      note   = "The demographic fields from the Stage 01 merge should exist and be well-filled. Low pct_filled may be real (a district that doesn't track a flag) or a merge miss.",
+      status = if (all(demographic_fields %in% names(cs_data))) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-2.4
+if (run_stage("02")) {
+  data.frame(
+    check  = c("join key", "unmatched course rows"),
+    result = c(merge_diag$key, format(merge_diag$n_unmatched, big.mark = ","))) |>
+    check_gt(
+      title  = "2.4 \u00B7 Did the course-coding merge land cleanly?",
+      note   = "Key uniqueness and row stability are gated above \u2014 a failure there halts the run. What's left to judge is whether any courses are still uncoded.",
+      status = if (merge_diag$n_unmatched == 0) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-2.4b
+if (run_stage("02")) {
+  merge_diag$unmatched_courses |>
+    check_gt(title = "2.4 \u00B7 Courses that didn't get coded")
+}
+```
+
+```{r}
+#| label: chk-2.5
+if (run_stage("02")) {
+  pct_uncoded <- 100 * mean(cs_data$C_course_subject_area == "UNCODED", na.rm = TRUE)
+
+  cs_data |>
+    count(C_course_subject_area, name = "n_records") |>
+    mutate(pct_records = round(100 * n_records / sum(n_records), 1)) |>
+    arrange(C_course_subject_area) |>
+    check_gt(
+      title  = glue("2.5 \u00B7 Coding output \u2014 nothing left uncoded? ({round(pct_uncoded, 1)}% uncoded)"),
+      note   = glue("Uncoded should be \u2264 {config$coding$uncoded_flag_threshold_pct}% of records, and distributions should look plausible. High UNCODED means courses need coding."),
+      status = if (pct_uncoded <= config$coding$uncoded_flag_threshold_pct) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-2.5b
+if (run_stage("02")) {
+  cs_data |>
+    count(C_course_subject_area, C_course_subject, name = "n_records") |>
+    mutate(pct_records = round(100 * n_records / sum(n_records), 1)) |>
+    arrange(C_course_subject_area) |>
+    check_gt(title = "2.5 \u00B7 Subject \u2014 % of records")
+}
+```
+
+```{r}
+#| label: chk-2.6
+if (run_stage("02")) {
+  cs_data |>
+    filter(C_course_time_exclude == "Exclude" |
+           C_class_size_and_teacher_load_exclude == "Exclude") |>
+    count(C_course_subject, D_course_name, C_course_time_exclude,
+          C_class_size_and_teacher_load_exclude, name = "n_courses", sort = TRUE) |>
+    arrange(C_course_subject) |>
+    check_gt(
+      title = "2.6 \u00B7 Exclusions \u2014 right thing dropping, for the right reason?",
+      note  = "Every excluded course should trace to a coding value that justifies it (lunch, study hall, non-instructional). Anything here that looks like a real class means a coding fix.")
+}
+```
+
+```{r}
+#| label: chk-2.7
+if (run_stage("02")) {
+  non_standard <- cs_data |>
+    count(across(all_of(c("D_location_name", time_cols))), C_course_format,
+          name = "n_records") |>
+    pivot_wider(names_from = C_course_format, values_from = n_records, values_fill = 0) |>
+    filter(`Standard` == 0) |>
+    arrange(across(all_of(c("D_location_name", time_cols))))
+
+  non_standard |>
+    check_gt(
+      title = "2.7 \u00B7 Which time blocks don't carry real instruction?",
+      note  = "Time-slots with no standard-format records (below), or very few distinct courses (next table), are identified so they fall out of instructional analysis.")
+}
+```
+
+```{r}
+#| label: chk-2.7b
+if (run_stage("02")) {
+  max_courses <- config$coding$max_unique_courses %||% 5
+
+  cs_data |>
+    group_by(across(all_of(c("D_location_name", time_cols)))) |>
+    mutate(n_courses = n_distinct(D_course_name)) |>
+    ungroup() |>
+    filter(n_courses <= max_courses, !C_course_subject_area %in% c("Core", "Non-Core")) |>
+    count(across(all_of(c("D_location_name", time_cols))), C_course_subject,
+          D_course_name, n_courses, name = "n_records") |>
+    arrange(D_location_name, n_courses, desc(n_records)) |>
+    check_gt(title = glue("2.7 \u00B7 Low-diversity time-slots (\u2264 {max_courses} courses, excl. Core and Non-Core)"))
+}
+```
+
+```{r}
+#| label: chk-2.8
+if (run_stage("02")) {
+  cols <- config$class_id$recipe[config$class_id$recipe %in% names(cs_data)]
+  cs_data |>
+    filter(!is.na(C_class_id)) |>
+    group_by(across(all_of(c("C_class_id", cols)))) |>
+    summarise(course = first(D_course_name), n_students = n_distinct(D_stu_id),
+              .groups = "drop") |>
+    arrange(desc(n_students)) |>
+    (\(d) slice_sample(d, n = min(8, nrow(d))))() |>
+    check_gt(
+      title = glue("2.8 \u00B7 Class ID \u2014 what defines a class here? ({paste(config$class_id$recipe, collapse = ' + ')})"),
+      note  = "The recipe should mark a place-in-time without over-splitting real classes. Use SECTION, never the teacher \u2014 a teacher in the id hides teacher double-bookings.")
+}
+```
+
+## 2.3 Gates
+
+```{r 02-gates}
+if (run_stage("02")) {
+  chk_stop("Every mapped column survived to Stage 02",
+           length(setdiff(names(config$column_map$course_schedule), names(cs_data))) == 0,
+           detail = paste("Missing:", paste(
+             setdiff(names(config$column_map$course_schedule), names(cs_data)),
+             collapse = ", ")))
+
+  chk_stop("Every term in the data has a configured weight",
+           all(as.character(unique(na.omit(cs_data$D_term))) %in% names(config$weights$term)),
+           detail = paste("Unweighted:", paste(
+             setdiff(as.character(unique(na.omit(cs_data$D_term))),
+                     names(config$weights$term)), collapse = ", ")))
+
+  chk_stop("Exclusion fields were created",
+           all(names(config$exclusions) %in% names(cs_data)))
+
+  chk_no_na(cs_data, "C_class_id", "Every row has a class ID")
+}
+```
 
 ---
 
 # Stage 03 — Weights, minutes and DB resolution
 
+The engine. Every call here is `cs_require()` rather than `tr_safe()`: if the
+resolution pipeline fails, the run stops. Previously a failure returned `NULL`
+and every later stage degraded quietly to empty rollups.
+
+## 3.0 Weights and minutes
+
+```{r 03-weights}
+if (run_stage("03")) {
+  chk_stage("Stage 03 — Weights, minutes and DB resolution")
+
+  cs_data <- cs_require(derive_class_weight_minutes(cs_data, config, spec),
+                        "Class weights and minutes derived")
+
+  cs_data$M_stu_class_weight <- cs_data$M_cls_class_weight
+  cs_data$M_tch_class_weight <- cs_data$M_cls_class_weight
+
+  chk_no_na(cs_data, "M_cls_class_weight", "Every row has a class weight")
+
+  chk_stop("Class weights are non-negative",
+           all(cs_data$M_cls_class_weight >= 0, na.rm = TRUE),
+           offenders = cs_data |> filter(M_cls_class_weight < 0) |>
+             count(D_location_name, D_term, name = "n_rows"))
+}
+```
+
+## 3.1 Resolution engine
+
+```{r 03-engine}
+if (run_stage("03")) {
+  cs_data$H_row_id_before_explosions <- seq_len(nrow(cs_data))
+
+  exploded    <- cs_require(explode_for_resolution(cs_data, config, spec),
+                            "Explosion for resolution")
+  flagged_all <- cs_require(flag_double_bookings(exploded, config),
+                            "Double-booking flags (all rows)")
+  flagged     <- cs_require(flag_double_bookings(exploded, config, filter_to_db = TRUE),
+                            "Double-booking flags (DB rows only)", min_rows = 0)
+  res         <- cs_require(resolve_double_bookings(flagged, config),
+                            "Resolution engine", min_rows = 0)
+  resolved    <- res$resolved
+  mapping     <- res$mapping
+  loadoff     <- cs_require(teacher_loadoff(resolved, config), "Teacher load-off",
+                            min_rows = 0)
+  unified     <- cs_require(unify_resolution(resolved, cs_data, loadoff),
+                            "Unification")
+}
+```
+
+```{r 03-precompute}
+if (run_stage("03")) {
+  flagged_students <- unique(flagged_all$D_stu_id[flagged_all$H_db_student_row == 1])
+  flagged_teachers <- unique(flagged_all$D_employee_id[flagged_all$H_db_teacher_row == 1])
+
+  pct_of <- function(a, b) { r <- round(100 * a / b, 1); r[is.na(b) | b == 0] <- NA_real_; r }
+
+  multi_teacher <- resolved |>
+    filter(startsWith(C_class_id_post_teachers, "CONS_")) |>
+    group_by(C_class_id_post_teachers) |>
+    summarise(n_tch = n_distinct(D_employee_id), .groups = "drop") |>
+    filter(n_tch > 1)
+
+  consol_sum      <- consolidation_summary(mapping)
+  teach_db_before <- length(flagged_teachers)
+  teach_db_after  <- {
+    rf <- resolved |> mutate(C_class_id = C_class_id_post_teachers) |>
+      select(-any_of(c("H_db_teacher_row", "H_db_student_row")))
+    rf <- flag_teacher_db(rf)
+    n_distinct(rf$D_employee_id[rf$H_db_teacher_row == 1])
+  }
+  sec_before <- n_distinct(mapping$C_class_id_original)
+  sec_after  <- n_distinct(mapping$C_class_id_resolved)
+
+  mono <- with(resolved,
+    all(M_class_weight_adj_same_course >= M_class_weight_post_class    - 1e-9, na.rm = TRUE) &&
+    all(M_class_weight_post_class      >= M_class_weight_post_teachers - 1e-9, na.rm = TRUE) &&
+    all(M_class_weight_post_teachers   >= M_class_weight_post_student  - 1e-9, na.rm = TRUE))
+
+  n_matched <- cs_data |>
+    semi_join(distinct(resolved, H_row_id_before_explosions),
+              by = "H_row_id_before_explosions") |> nrow()
+  unif_ok <- isTRUE(nrow(unified) == nrow(resolved) + (nrow(cs_data) - n_matched))
+
+  stu_before <- exploded |> group_by(D_stu_id) |>
+    summarise(b = sum(M_class_weight_exploded, na.rm = TRUE), .groups = "drop")
+  stu_after <- resolved |> group_by(D_stu_id) |>
+    summarise(a = sum(M_class_weight_post_student, na.rm = TRUE), .groups = "drop")
+  stu_ba <- stu_before |> left_join(stu_after, by = "D_stu_id") |>
+    mutate(a = coalesce(a, b))
+
+  # Example pickers are cosmetic: a missing example weakens a trace table, it
+  # does not invalidate anything. tr_safe is the right tool here.
+  ex_student <- tr_safe(resolved |> filter(H_db_student_row == 1) |>
+                          slice_head(n = 1) |> pull(D_stu_id), NA)
+  ex_cons    <- tr_safe(consol_sum[["Example consolidations (largest first)"]]$C_class_id_consolidated[1], NA) %||% NA
+
+  trace_cols <- function(d) d |> select(any_of(c(
+    "D_stu_id", "D_course_name", "C_period_exploded", "C_rotation_exploded",
+    "C_class_id_post_teachers", "M_class_weight_exploded", "M_class_weight_post_class",
+    "M_class_weight_post_teachers", "M_class_weight_post_student",
+    "M_student_count_adjusted")))
+}
+```
+
+```{r}
+#| output: asis
+#| echo: false
+cs_heading("03", "## 3.2 Checks")
+```
+
+```{r}
+#| label: chk-3.0
+if (run_stage("03")) {
+  tk   <- config$time_cols[[config$time_format]]
+  keep <- intersect(c("C_class_id", "D_location_name", tk, "D_term",
+                      "D_course_name", "M_cls_class_weight", "M_cls_class_minutes"),
+                    names(cs_data))
+  base <- cs_data |> filter(!is.na(C_class_id)) |> distinct(across(all_of(keep)))
+  uniq <- base |> distinct(M_cls_class_weight, .keep_all = TRUE)
+  d <- if (nrow(uniq) < 10)
+    bind_rows(uniq, base |> anti_join(uniq, by = "C_class_id") |>
+                slice_sample(n = 10 - nrow(uniq))) else uniq
+  d <- d |> arrange(desc(M_cls_class_weight))
+  d$time   <- apply(d[intersect(tk, names(d))], 1, function(r) paste(r[!is.na(r)], collapse = " "))
+  d$course <- d$D_course_name
+
+  d |> select(any_of(c("D_location_name", "time", "D_term", "course",
+                       "M_cls_class_weight", "M_cls_class_minutes"))) |>
+    check_gt(
+      title = "3.0 \u00B7 Class weight & minutes \u2014 do a few real classes look right?",
+      note  = "term \u00D7 rotation \u00D7 period should reconcile by hand; minutes come from the bell schedule. They're separate on purpose. Shows every distinct weight value.")
+}
+```
+
+```{r}
+#| label: chk-3.1
+if (run_stage("03")) {
+  cs_data |>
+    filter(C_course_time_exclude == "Include") |>
+    distinct(D_location_name, D_stu_id, C_class_id, M_stu_class_weight) |>
+    group_by(D_location_name, D_stu_id) |>
+    summarise(total_weight = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop") |>
+    group_by(D_location_name) |>
+    summarise(n_students = n_distinct(D_stu_id),
+              avg_weight_per_student = round(mean(total_weight), 2), .groups = "drop") |>
+    check_gt(
+      title = "3.1 \u00B7 Weight per student, by school",
+      note  = "Sums should reflect the schedule structure (blocks vs. periods) \u2014 NOT forced to a single target. Teacher version in the next table.")
+}
+```
+
+```{r}
+#| label: chk-3.1b
+if (run_stage("03")) {
+  cs_data |>
+    filter(C_class_size_and_teacher_load_exclude == "Include") |>
+    distinct(D_location_name, D_employee_id, C_class_id, M_tch_class_weight) |>
+    group_by(D_location_name, D_employee_id) |>
+    summarise(total_weight = sum(M_tch_class_weight, na.rm = TRUE), .groups = "drop") |>
+    group_by(D_location_name) |>
+    summarise(n_teachers = n_distinct(D_employee_id),
+              avg_weight_per_teacher = round(mean(total_weight), 2), .groups = "drop") |>
+    check_gt(title = "3.1 \u00B7 Weight per teacher, by school")
+}
+```
+
+```{r}
+#| label: chk-3.2
+if (run_stage("03")) {
+  cs_data |>
+    filter(C_course_time_exclude == "Include") |>
+    distinct(D_location_name, D_stu_id, C_class_id, M_stu_class_weight, M_cls_class_minutes) |>
+    group_by(D_location_name, D_stu_id) |>
+    summarise(total_weight = sum(M_stu_class_weight, na.rm = TRUE),
+              total_minutes_per_cycle = sum(M_cls_class_minutes, na.rm = TRUE),
+              .groups = "drop") |>
+    group_by(D_location_name) |>
+    summarise(avg_weight = round(mean(total_weight), 1),
+              avg_minutes_per_cycle = round(mean(total_minutes_per_cycle), 0),
+              .groups = "drop") |>
+    check_gt(
+      title = "3.2 \u00B7 Minutes layer (separate) \u2014 instructional time, by school",
+      note  = "Avg weight and avg minutes side by side. weight \u00D7 minutes should be comparable across schools even when period lengths differ.")
+}
+```
+
+```{r}
+#| label: chk-3.3
+if (run_stage("03")) {
+  n_inc_stu <- n_distinct(cs_data$D_stu_id[cs_data$C_course_time_exclude == "Include"])
+  n_inc_tch <- n_distinct(cs_data$D_employee_id[cs_data$C_class_size_and_teacher_load_exclude == "Include"])
+
+  avg_class_size <- cs_data |> filter(C_class_size_and_teacher_load_exclude == "Include") |>
+    distinct(C_class_id, D_stu_id) |> count(C_class_id, name = "size") |>
+    summarise(v = round(mean(size), 1)) |> pull(v)
+  avg_stu_w <- cs_data |> filter(C_course_time_exclude == "Include") |>
+    distinct(D_stu_id, C_class_id, M_stu_class_weight) |> group_by(D_stu_id) |>
+    summarise(t = sum(M_stu_class_weight, na.rm = TRUE), .groups = "drop") |>
+    summarise(v = round(mean(t), 1)) |> pull(v)
+  avg_tch_w <- cs_data |> filter(C_class_size_and_teacher_load_exclude == "Include") |>
+    distinct(D_employee_id, C_class_id, M_tch_class_weight) |> group_by(D_employee_id) |>
+    summarise(t = sum(M_tch_class_weight, na.rm = TRUE), .groups = "drop") |>
+    summarise(v = round(mean(t), 1)) |> pull(v)
+
+  data.frame(
+    metric = c("Students double-booked", "Teachers double-booked", "Avg class size",
+               "Avg weight / student", "Avg weight / teacher"),
+    before = c(paste0(length(flagged_students), " (", pct_of(length(flagged_students), n_inc_stu), "%)"),
+               paste0(length(flagged_teachers), " (", pct_of(length(flagged_teachers), n_inc_tch), "%)"),
+               avg_class_size, avg_stu_w, avg_tch_w),
+    after  = rep("pending resolution", 5)) |>
+    check_gt(
+      title = "3.3 \u00B7 Before-resolution snapshot",
+      note  = "The starting picture \u2014 double-bookings by type, avg class size, avg weights, all unresolved. The 'after' fills in once resolution runs (3.6).")
+}
+```
+
+```{r}
+#| label: chk-3.4
+if (run_stage("03")) {
+  consol_sum[["Component-size distribution"]] |>
+    check_gt(
+      title  = glue("3.4 \u00B7 consolidate_sections() \u2014 overlapping sections merge into one class (teacher DBs {teach_db_before} \u2192 {teach_db_after} \u00B7 sections {sec_before} \u2192 {sec_after})"),
+      note   = "Every CONS_ class must be exactly one teacher's merged sections. If any spans >1 teacher, the CONS_ id is colliding \u2014 flag it, don't edit the helper.",
+      status = if (nrow(multi_teacher) == 0) "PASS" else "FAIL")
+}
+```
+
+```{r}
+#| label: chk-3.5
+if (run_stage("03")) {
+  resolved |> filter(C_course_time_exclude == "Include") |>
+    group_by(D_location_name, D_stu_id) |>
+    summarise(exploded = sum(M_class_weight_exploded, na.rm = TRUE),
+              post_class = sum(M_class_weight_post_class, na.rm = TRUE),
+              post_teachers = sum(M_class_weight_post_teachers, na.rm = TRUE),
+              post_student = sum(M_class_weight_post_student, na.rm = TRUE),
+              .groups = "drop") |>
+    group_by(D_location_name) |>
+    summarise(n_db_students = n_distinct(D_stu_id),
+              across(c(exploded, post_class, post_teachers, post_student),
+                     ~ round(mean(.x), 2)), .groups = "drop") |>
+    check_gt(
+      title  = "3.5 \u00B7 resolve_stage() \u2014 weight splits at conflicts, only ever shrinking",
+      note   = "adj \u2265 post_class \u2265 post_teachers \u2265 post_student everywhere. The columns show a double-booked student's weight moving down through each stage.",
+      status = if (mono) "PASS" else "FAIL")
+}
+```
+
+```{r}
+#| label: chk-3.6
+if (run_stage("03")) {
+  data.frame(
+    metric = c("Students double-booked", "Teachers double-booked", "Distinct sections",
+               "Avg weight / student"),
+    before = c(length(flagged_students), teach_db_before, sec_before, round(mean(stu_ba$b), 2)),
+    after  = c(0, teach_db_after, sec_after, round(mean(stu_ba$a), 2))) |>
+    check_gt(
+      title  = "3.6 \u00B7 unify_resolution() \u2014 before \u2192 after",
+      note   = "Double-bookings resolve to zero and sections consolidate to their true count. Row accounting in the next table confirms nothing was lost or duplicated.",
+      status = if (unif_ok) "PASS" else "FAIL")
+}
+```
+
+```{r}
+#| label: chk-3.6b
+if (run_stage("03")) {
+  unification_summary(unified, resolved, cs_data) |>
+    check_gt(title = "3.6 \u00B7 Row accounting (unified = resolved + non-DB)")
+}
+```
+
+```{r}
+#| label: chk-3.7
+if (run_stage("03")) {
+  trace_cols(trace_record(resolved, stu_id = ex_student)) |>
+    check_gt(
+      title = glue("3.7 \u00B7 A student double-booking, traced end to end (stu {ex_student})"),
+      note  = "Follow one student's weight across the stage columns \u2014 it should sum to one class-worth, no time lost or double-counted.")
+}
+```
+
+```{r}
+#| label: chk-3.7b
+if (run_stage("03")) {
+  trace_cols(trace_record(resolved, class_id = ex_cons)) |>
+    check_gt(
+      title = glue("3.7 \u00B7 A teacher consolidation, traced ({ex_cons})"),
+      note  = "The teacher's sections merge into one CONS_ class, but each student keeps only their own meetings \u2014 the union never inflates anyone's time.")
+}
+```
+
+## 3.3 Gates
+
+```{r 03-gates}
+if (run_stage("03")) {
+  chk_stop("Weight only ever shrinks through the resolution stages", mono,
+           detail = "adj >= post_class >= post_teachers >= post_student must hold on every row")
+
+  chk_stop("Every consolidated class belongs to exactly one teacher",
+           nrow(multi_teacher) == 0,
+           value = paste0(nrow(multi_teacher), " colliding CONS_ id(s)"),
+           offenders = multi_teacher)
+
+  chk_stop("Unification accounts for every row", unif_ok,
+           value  = paste0(format(nrow(unified), big.mark = ","), " unified rows"),
+           detail = paste0("expected ", format(nrow(resolved), big.mark = ","),
+                           " resolved + ", format(nrow(cs_data) - n_matched, big.mark = ","),
+                           " non-DB"))
+}
+```
+
 ---
 
 # Stage 04 — Rollups and export
 
----
+## 4.0 Rollup layer
 
-# Check report
+```{r 04-rollups}
+if (run_stage("04")) {
+  chk_stage("Stage 04 — Rollups and export")
 
-```{r final-report}
-check_log <- chk_report(print_table = FALSE)
+  unified <- cs_require(add_minutes(unified, config, spec),        "Minutes added")
+  unified <- cs_require(add_class_size(unified, config),           "Class size added")
+  unified <- cs_require(add_class_primaries(unified),              "Class primaries added")
+  unified <- cs_require(add_class_fields(unified),                 "Class fields added")
+  unified <- cs_require(add_class_weight_times_size(unified),      "Weight x size added")
+  unified <- cs_require(add_teacher_metrics(unified, config),      "Teacher metrics added")
+  unified <- cs_require(add_teacher_primary_fields(unified),       "Teacher primary fields added")
+  unified <- cs_require(add_teacher_flags(unified),                "Teacher flags added")
+}
 ```
 
-```{r final-table}
-check_log |> dplyr::select(seq, stage, check, severity, result, value)
+## 4.1 Optional add-ons
+
+Genuinely optional, so `cs_optional()`: a district without an HR file gets the
+core rollups with those fields as NA, and the report says so.
+
+```{r 04-addons}
+if (run_stage("04")) {
+  hr_on     <- isTRUE(config$add_ons$teacher_hr$enabled)
+  grades_on <- isTRUE(config$add_ons$course_grades$enabled)
+  grades_rollup <- NULL
+
+  # Uses the object loaded and renamed in Stage 01 rather than re-reading the
+  # file. That is what closes the gap the old pipeline had: the add-on now sees
+  # D_ columns because the rename happened on the standard path.
+  if (hr_on) {
+    if (!is.null(teacher_hr)) {
+      unified <- cs_require(apply_teacher_hr(unified, teacher_hr, config),
+                            "Teacher HR applied")
+    } else {
+      chk_info("Add-on skipped: teacher_hr", "enabled in config but no file loaded")
+      hr_on <- FALSE
+    }
+  } else {
+    chk_info("Add-on skipped: teacher_hr", "disabled in config")
+  }
+
+  if (grades_on) {
+    if (!is.null(course_grades_raw) && !is.null(cs_course_coding)) {
+      gr <- cs_require(process_course_grades(course_grades_raw, cs_course_coding, config),
+                       "Course grades processed", min_rows = 0)
+      unified <- apply_course_grades(unified, gr$student_proficiency)
+      grades_rollup <- gr$course_grades_rollup
+    }
+  } else {
+    chk_info("Add-on skipped: course_grades", "disabled in config")
+  }
+}
+```
+
+## 4.2 Build the rollups
+
+```{r 04-build}
+if (run_stage("04")) {
+  teacher_rollup <- cs_require(build_teacher_rollup(unified, config), "Teacher rollup built")
+  class_rollup   <- cs_require(build_class_rollup(unified, teacher_rollup, config),
+                               "Class rollup built")
+  student_rollup <- cs_require(build_student_rollup(unified, config), "Student rollup built")
+}
+```
+
+```{r 04-precompute}
+if (run_stage("04")) {
+  size_invariant <- all(class_rollup$M_cls_class_size <= class_rollup$M_cls_num_stu + 1e-9,
+                        na.rm = TRUE)
+
+  cls_bucket_na <- class_rollup |> filter(C_class_size_exclude == "Include") |>
+    summarise(n = sum(is.na(C_cls_class_size_bucket))) |> pull(n)
+  tch_bucket_na <- teacher_rollup |> summarise(n = sum(is.na(M_tch_load_bucket))) |> pull(n)
+  bucket_levels <- levels(.bucketize(0, config$buckets$class_size))
+  util_na       <- teacher_rollup |> summarise(n = sum(is.na(M_tch_utilization))) |> pull(n)
+
+  want_class <- c("C_class_id","C_cls_course_subject","C_cls_grade","C_cls_course_name",
+                  "M_cls_class_size","C_cls_class_size_bucket","M_cls_class_weight",
+                  "M_meeting_minutes","M_tch_utilization","M_tch_load")
+  want_tch   <- c("D_employee_id","C_tch_course_subject","C_tch_location_name",
+                  "C_teacher_load_exclude","M_tch_num_periods","M_tch_utilization",
+                  "M_tch_load","M_tch_load_bucket","M_tch_num_preps")
+  want_stu   <- c("D_stu_id","C_class_id","C_course_subject","M_class_weight",
+                  "M_cls_class_size","C_proficiency")
+
+  miss_class  <- setdiff(want_class, names(class_rollup))
+  miss_tch    <- setdiff(want_tch,   names(teacher_rollup))
+  miss_stu    <- setdiff(want_stu,   names(student_rollup))
+  contract_ok <- length(miss_class) == 0 && length(miss_tch) == 0 && length(miss_stu) == 0
+
+  dist_by_school <- class_rollup |>
+    filter(C_class_size_exclude == "Include") |>
+    group_by(C_cls_location_name, C_class_id) |>
+    summarise(bucket = C_cls_class_size_bucket[which.max(M_cls_class_size)], .groups = "drop") |>
+    count(C_cls_location_name, bucket) |>
+    group_by(C_cls_location_name) |>
+    mutate(pct = round(100 * n / sum(n), 1)) |>
+    ungroup() |> select(-n) |>
+    pivot_wider(names_from = bucket, values_from = pct, values_fill = 0, names_expand = TRUE) |>
+    select(C_cls_location_name, any_of(bucket_levels)) |>
+    rename(School = C_cls_location_name)
+}
+```
+
+```{r}
+#| output: asis
+#| echo: false
+cs_heading("04", "## 4.3 Checks")
+```
+
+```{r}
+#| label: chk-4.1
+if (run_stage("04")) {
+  data.frame(
+    rollup = c("class", "teacher", "student", if (!is.null(grades_rollup)) "course_grades"),
+    rows   = c(nrow(class_rollup), nrow(teacher_rollup), nrow(student_rollup),
+               if (!is.null(grades_rollup)) nrow(grades_rollup)),
+    cols   = c(ncol(class_rollup), ncol(teacher_rollup), ncol(student_rollup),
+               if (!is.null(grades_rollup)) ncol(grades_rollup))) |>
+    check_gt(
+      title = "4.1 \u00B7 Rollups built \u2014 shapes look right",
+      note  = "One row per class-slot, per teacher, and per student-class-slot. Class rows > distinct classes is expected (grain is class \u00D7 term \u00D7 period \u00D7 rotation).")
+}
+```
+
+```{r}
+#| label: chk-4.2
+if (run_stage("04")) {
+  dist_by_school |>
+    check_gt(
+      title  = "4.2 \u00B7 Class size \u2014 distribution by school (% of classes per size band)",
+      note   = "Adjusted size never exceeds raw headcount (double-booked students count fractionally). Each school's row shows the share of its classes in each size band.",
+      status = if (size_invariant) "PASS" else "FAIL")
+}
+```
+
+```{r}
+#| label: chk-4.2b
+if (run_stage("04")) {
+  class_rollup |>
+    summarise(classes = n_distinct(C_class_id),
+              avg_raw_headcount = round(mean(M_cls_num_stu, na.rm = TRUE), 1),
+              avg_adjusted_size = round(mean(M_cls_class_size, na.rm = TRUE), 1)) |>
+    check_gt(title = "4.2 \u00B7 Adjusted vs raw headcount")
+}
+```
+
+```{r}
+#| label: chk-4.3
+if (run_stage("04")) {
+  data.frame(
+    check = c("class-size NA buckets", "teacher-load NA buckets"),
+    n     = c(cls_bucket_na, tch_bucket_na)) |>
+    check_gt(
+      title  = "4.3 \u00B7 Class-size & teacher-load buckets populated",
+      note   = "Every included class needs a size bucket; every teacher a load bucket. If n > 0, a value falls outside the config buckets \u2014 extend the top bucket in config$buckets.",
+      status = if (isTRUE(cls_bucket_na == 0 && tch_bucket_na == 0)) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-4.4
+if (run_stage("04")) {
+  teacher_rollup |>
+    group_by(C_tch_location_name) |>
+    summarise(teachers = n(), avg_util = round(mean(M_tch_utilization, na.rm = TRUE), 2),
+              na = sum(is.na(M_tch_utilization)), .groups = "drop") |>
+    check_gt(
+      title  = "4.4 \u00B7 Teacher utilization populated",
+      note   = "Every teacher needs a utilization value. NA means a school has no full_utilization entry \u2014 confirm config$full_utilization$by_school keys exactly match the school names above.",
+      status = if (isTRUE(util_na == 0)) "PASS" else "CHECK")
+}
+```
+
+```{r}
+#| label: chk-4.5
+if (run_stage("04")) {
+  data.frame(
+    rollup  = c("class", "teacher", "student"),
+    missing = c(ifelse(length(miss_class) == 0, "none", paste(miss_class, collapse = ", ")),
+                ifelse(length(miss_tch)   == 0, "none", paste(miss_tch,   collapse = ", ")),
+                ifelse(length(miss_stu)   == 0, "none", paste(miss_stu,   collapse = ", ")))) |>
+    check_gt(
+      title  = "4.5 \u00B7 VISTA column contract",
+      note   = "Each rollup must have the columns VISTA expects (add-on fields present even when NA). Anything under 'missing' will break VISTA \u2014 add it to the rollup builder.",
+      status = if (contract_ok) "PASS" else "FAIL")
+}
+```
+
+```{r}
+#| label: chk-4.6
+if (run_stage("04")) {
+  data.frame(
+    add_on  = c("teacher_hr", "course_grades"),
+    enabled = c(hr_on, grades_on),
+    mode    = c(config$add_ons$teacher_hr$mode %||% NA, "\u2014"),
+    result  = c(if (hr_on && "C_tch_novice_indicator" %in% names(teacher_rollup))
+                  "novice indicator populated" else "skipped / NA",
+                if (!is.null(grades_rollup))
+                  glue("{nrow(grades_rollup)} grade rows; proficiency merged") else "skipped / NA")) |>
+    check_gt(
+      title = "4.6 \u00B7 Add-on status",
+      note  = "The optional add-ons run (or skip) based on config$add_ons. Skipped is fine \u2014 the core rollups carry those fields as NA and VISTA drops the metrics that need them.")
+}
+```
+
+## 4.4 Gates
+
+```{r 04-gates}
+if (run_stage("04")) {
+  chk_stop("Adjusted class size never exceeds raw headcount", size_invariant,
+           offenders = class_rollup |>
+             filter(M_cls_class_size > M_cls_num_stu + 1e-9) |>
+             select(any_of(c("C_class_id", "M_cls_class_size", "M_cls_num_stu"))))
+
+  chk_stop("VISTA column contract holds", contract_ok,
+           detail = paste("Missing \u2014 class:", paste(miss_class, collapse = ", "),
+                          "| teacher:", paste(miss_tch, collapse = ", "),
+                          "| student:", paste(miss_stu, collapse = ", ")))
+
+  chk_stop("Rollups are not empty",
+           nrow(class_rollup) > 0 && nrow(teacher_rollup) > 0 && nrow(student_rollup) > 0)
+}
+```
+
+## 4.5 Write to SharePoint
+
+Nothing is written locally. `put()` reports each file into the check log, so the
+run report records exactly what left the pipeline.
+
+```{r 04-export}
+if (run_stage("04")) {
+  out_folder <- config$folders[[config$outputs$folder %||% "raw"]]
+  out_prefix <- config$outputs$subfolder %||% "/"
+
+  put <- function(data, name) {
+    if (is.null(data) || nrow(data) == 0) {
+      chk_info(paste0("Output SKIPPED (empty): ", name), 0)
+      return(invisible(NULL))
+    }
+    path <- paste0(out_prefix, name)
+    ers_write_sharepoint(data = data, folder_path = out_folder,
+                         file_name_with_extension = path)
+    chk_info(paste0("Output written: ", name),
+             paste0(format(nrow(data), big.mark = ","), " rows x ", ncol(data), " cols"),
+             detail = paste0(out_folder, path))
+    invisible(data)
+  }
+
+  if (isTRUE(config$outputs$class_rollup$write))
+    put(class_rollup,   config$outputs$class_rollup$file_name)
+  if (isTRUE(config$outputs$teacher_rollup$write))
+    put(teacher_rollup, config$outputs$teacher_rollup$file_name)
+  if (isTRUE(config$outputs$student_rollup$write))
+    put(student_rollup, config$outputs$student_rollup$file_name)
+  if (!is.null(grades_rollup) && isTRUE(config$outputs$grades_rollup$write))
+    put(grades_rollup,  config$outputs$grades_rollup$file_name)
+}
 ```

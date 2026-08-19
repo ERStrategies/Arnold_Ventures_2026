@@ -8,21 +8,24 @@
 # schedule review helpers load, because check_gt() reports into it.
 # =============================================================================
 
+# LOAD ORDER MATTERS. The pipeline code is written without namespace prefixes,
+# so whichever package attaches LAST wins any name collision. data.table masks
+# first(), last() and between() from dplyr, so tidyverse goes last and dplyr's
+# versions are the ones in scope.
 suppressPackageStartupMessages({
-  library(tidyverse)
-  library(data.table)
-  library(lubridate)
-  library(glue)
-  library(stringr)
+  library(data.table)     # first, so tidyverse can mask it
   library(openxlsx)
   library(readxl)
   library(here)
   library(yaml)
+  library(janitor)        # clean_names()
+  library(rlang)          # parse_expr()
   library(Microsoft365R)
   library(erstools)
   library(gt)
   library(htmltools)
   library(scales)
+  library(tidyverse)      # last: dplyr wins every collision
 })
 
 options(scipen = 99)
@@ -37,7 +40,7 @@ if (!exists("config")) {
 
 # --- Shared machinery, used by every ERS pipeline ----------------------------
 .shared <- here::here(config$shared_helpers_path %||% "templates/shared")
-for (f in c("00_checks.R", "00_io.R", "00_joins.R", "00_prep.R")) {
+for (f in c("00_io.R", "00_joins.R", "00_prep.R")) {
   p <- file.path(.shared, f)
   if (!file.exists(p)) stop("Shared helper not found: ", p, call. = FALSE)
   source(p)
@@ -46,6 +49,7 @@ for (f in c("00_checks.R", "00_io.R", "00_joins.R", "00_prep.R")) {
 # --- Course schedule engine ---------------------------------------------------
 .hp <- here::here(config$helpers_path)
 .cs_helpers <- c(
+  "00_cs_gates.R",
   "01_cs_explore_helpers.R",
   "01_cs_review_helpers.R",
   "02_cs_db_helpers.R",
@@ -119,4 +123,112 @@ cs_optional <- function(expr, label) {
              else "loaded")
   }
   res
+}
+
+# =============================================================================
+# How far the pipeline runs
+# =============================================================================
+# run_through is the only control. Stages after it do not execute — not in Run
+# All, not in Render. Everything that does run shows its checks.
+#
+# Set config$report$run_through: "01" while you work through the explore stage,
+# then raise it as each stage settles. Nothing is written to SharePoint unless
+# it is "04".
+# =============================================================================
+
+.cs_run_through <- "04"
+
+cs_set_run_through <- function(config) {
+
+  # Accepts either a single value ("02") or a list. With a list, the pipeline
+  # runs through the HIGHEST stage supplied — so commenting lines out is how
+  # you pull the stopping point back:
+  #
+  #   run_through: ["01", "02"]        -> runs 01 and 02
+  #   run_through: ["01", "02",
+  #   #             "03"]              -> runs 01 and 02
+  stages <- as.character(unlist(config$report$run_through %||% "04"))
+
+  unknown <- setdiff(stages, c("01", "02", "03", "04"))
+  if (length(unknown) > 0) {
+    stop("config$report$run_through must contain only the quoted strings ",
+         '"01", "02", "03", "04" — got: ', paste(unknown, collapse = ", "),
+         call. = FALSE)
+  }
+
+  # Everything commented out means the explore stage only; Stage 01 always runs.
+  .cs_run_through <<- if (length(stages) == 0) "01" else max(stages)
+
+  message("Pipeline runs through stage ", .cs_run_through,
+          if (.cs_run_through < "04")
+            " — later stages skipped, nothing written to SharePoint" else "")
+  invisible(.cs_run_through)
+}
+
+#' TRUE when this stage should execute.
+run_stage <- function(stage) as.character(stage) <= .cs_run_through
+
+#' Emit a heading only when its stage runs, so a skipped stage leaves no empty
+#' section behind.
+cs_heading <- function(stage, text) {
+  if (run_stage(stage)) cat("\n", text, "\n\n", sep = "")
+  invisible(NULL)
+}
+
+
+# =============================================================================
+# Config readiness
+# =============================================================================
+# The config is filled in over several sittings as the data reveals itself.
+# This reports which tiers are complete, so "what do I still need to learn?"
+# is answerable from the report rather than by scrolling the YAML.
+# =============================================================================
+
+.cs_tier_spec <- list(
+  list(tier = "0", when = "Before you run anything",
+       items = c("district", "year", "folders", "sources")),
+  list(tier = "1", when = "After the raw profile",
+       items = c("column_map", "intake", "stu_demographics_join",
+                 "derivations", "scope")),
+  list(tier = "2", when = "Once you understand each file",
+       items = c("add_ons", "coding", "exclusions")),
+  list(tier = "3", when = "After the district explains bells and terms",
+       items = c("class_id", "time_format", "time_cols", "weights",
+                 "full_utilization", "bell_minutes")),
+  list(tier = "4", when = "After you see DB rates",
+       items = c("db_sizing_filters", "db_resolution", "teacher_db")),
+  list(tier = "5", when = "Reporting choices",
+       items = c("self_contained", "buckets", "report", "outputs"))
+)
+
+.cs_filled <- function(x) {
+  if (is.null(x)) return("empty")
+  if (is.list(x) && length(x) == 0) return("empty")
+  if (is.list(x)) {
+    n_empty <- sum(vapply(x, function(v)
+      is.null(v) || (is.list(v) && length(v) == 0), logical(1)))
+    if (n_empty == length(x)) return("empty")
+    if (n_empty > 0) return(paste0("partial (", length(x) - n_empty, "/", length(x), ")"))
+    return("set")
+  }
+  if (length(x) == 0 || all(is.na(x))) return("empty")
+  "set"
+}
+
+config_readiness <- function(config) {
+  rows <- lapply(.cs_tier_spec, function(t) {
+    data.frame(
+      tier    = t$tier,
+      when    = t$when,
+      section = t$items,
+      status  = vapply(t$items, function(k) .cs_filled(config[[k]]), character(1)),
+      stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+
+  incomplete <- unique(out$tier[out$status != "set"])
+  chk_info("Config tiers not yet complete",
+           if (length(incomplete) == 0) "none" else paste(incomplete, collapse = ", "))
+  out
 }

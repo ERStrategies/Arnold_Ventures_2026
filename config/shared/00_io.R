@@ -21,8 +21,8 @@
 
 #' Where cached extracts live for this district.
 cache_dir <- function(cfg) {
-  d <- cfg$paths$cache_dir %||% here::here("cache", tolower(cfg$.meta$district))
-  d
+  slug <- cfg$.meta$district %||% gsub("[^A-Za-z0-9]+", "_", tolower(cfg$district %||% "district"))
+  cfg$paths$cache_dir %||% here::here("cache", tolower(slug))
 }
 
 .slug <- function(x) {
@@ -31,23 +31,58 @@ cache_dir <- function(cfg) {
   tolower(x)
 }
 
-#' Resolve a source key to folder / file / drive using the config.
+#' Resolve a source key to a folder path and file name.
+#'
+#' Two config shapes are supported, because the pipelines adopted the newer one
+#' at different times.
+#'
+#'   NEW — every file in one block, each naming a folder alias:
+#'     folders: { raw: "...", source_of_truth: "..." }
+#'     sources:
+#'       course_schedule: { folder: raw, file: "/0. Raw Data/..." }
+#'
+#'   OLD — a block per folder:
+#'     raw_data_folder_path: "..."
+#'     raw_files: { cs_raw: "/0. Raw Data/..." }
+#'
+#' A source declared with file: null is "expected but not supplied yet" and is
+#' reported as such rather than treated as a typo.
 .resolve_source <- function(key, cfg) {
+
+  # --- new shape -------------------------------------------------------------
+  if (!is.null(cfg$sources) && key %in% names(cfg$sources)) {
+    src <- cfg$sources[[key]]
+    if (is.null(src$file)) {
+      return(list(folder = NA_character_, file = NA_character_,
+                  drive = NULL, group = src$folder, declared_only = TRUE))
+    }
+    folder <- cfg$folders[[src$folder %||% "raw"]]
+    if (is.null(folder)) {
+      stop("Source `", key, "` names folder alias `", src$folder,
+           "`, which is not in config$folders.", call. = FALSE)
+    }
+    return(list(folder = folder, file = src$file,
+                drive = cfg$drives[[src$folder]], group = src$folder,
+                declared_only = FALSE))
+  }
+
+  # --- old shape -------------------------------------------------------------
   if (!is.null(cfg$raw_files[[key]])) {
     return(list(folder = cfg$raw_data_folder_path,
                 file   = cfg$raw_files[[key]],
                 drive  = cfg$drives$raw_data,
-                group  = "raw"))
+                group  = "raw", declared_only = FALSE))
   }
   if (!is.null(cfg$source_of_truth_files[[key]])) {
     return(list(folder = cfg$source_of_truth_folder_path,
                 file   = cfg$source_of_truth_files[[key]],
                 drive  = cfg$drives$source_of_truth,
-                group  = "source_of_truth"))
+                group  = "source_of_truth", declared_only = FALSE))
   }
-  stop("Source key `", key, "` is not in raw_files or source_of_truth_files. ",
-       "Available: ",
-       paste(c(names(cfg$raw_files), names(cfg$source_of_truth_files)), collapse = ", "),
+
+  stop("Source key `", key, "` is not declared. Available: ",
+       paste(c(names(cfg$sources), names(cfg$raw_files),
+               names(cfg$source_of_truth_files)), collapse = ", "),
        call. = FALSE)
 }
 
@@ -61,7 +96,15 @@ cache_dir <- function(cfg) {
 #'   column_map is written against the district's own header spellings.
 read_source <- function(key, cfg, refresh = FALSE, sheet = NULL, clean_names = FALSE) {
 
-  src   <- .resolve_source(key, cfg)
+  src <- .resolve_source(key, cfg)
+
+  # Declared in config but no file supplied yet. Not an error — it is a fact
+  # about where the district is in sending data, and the report should say so.
+  if (isTRUE(src$declared_only)) {
+    chk_info(paste0("Source declared but not supplied: ", key), "file: null")
+    return(NULL)
+  }
+
   dir   <- cache_dir(cfg)
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)
   cpath <- file.path(dir, paste0(.slug(key), "__", .slug(basename(src$file)), ".rds"))
