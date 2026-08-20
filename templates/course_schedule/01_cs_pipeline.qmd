@@ -3,7 +3,7 @@ title: "Course Schedule Pipeline"
 date: today
 params:
   district: "nashville"
-  refresh_raw: false      # TRUE re-reads every source from SharePoint; FALSE uses cached .rds files
+  refresh_raw: true      # TRUE re-reads every source from SharePoint; FALSE uses cached .rds files
 format:
   html:
     toc: true
@@ -235,6 +235,108 @@ if (run_stage("01")) {
     cg_map <- unlist(config$column_map$course_grades)
     course_grades_raw <- course_grades_raw |> rename(any_of(cg_map))
     chk_info("Course grades renamed", paste(names(cg_map), collapse = ", "))
+  }
+}
+```
+
+### Add-on data coverage checks
+
+How well do the add-on files (teacher HR, course grades) match the course
+schedule? These checks run early so coverage gaps are visible before any
+downstream processing.
+
+```{r addon-coverage-teacher-hr}
+if (run_stage("01") && !is.null(teacher_hr) && "D_employee_id" %in% names(teacher_hr)) {
+  # Uniqueness check
+  hr_dupes <- teacher_hr |>
+    count(D_employee_id) |>
+    filter(n > 1)
+
+  data.frame(
+    measure = c("Rows in teacher_hr", "Distinct D_employee_id", "Duplicate D_employee_id values"),
+    value   = c(nrow(teacher_hr), n_distinct(teacher_hr$D_employee_id), nrow(hr_dupes))
+  ) |>
+    check_gt(
+      title  = "1.2b · Teacher HR uniqueness",
+      status = if (nrow(hr_dupes) == 0) "PASS" else "CHECK")
+
+  # Coverage: what share of teachers in the schedule have HR data?
+  schedule_teachers <- cs_raw |>
+    filter(!is.na(D_employee_id)) |>
+    distinct(D_employee_id, D_stu_grade)
+
+  hr_ids <- distinct(teacher_hr, D_employee_id)
+
+  schedule_teachers |>
+    mutate(has_hr = D_employee_id %in% hr_ids$D_employee_id) |>
+    group_by(D_stu_grade) |>
+    summarise(
+      teachers_in_schedule = n_distinct(D_employee_id),
+      teachers_with_hr     = n_distinct(D_employee_id[has_hr]),
+      pct_coverage         = round(100 * teachers_with_hr / teachers_in_schedule, 1),
+      .groups = "drop") |>
+    arrange(D_stu_grade) |>
+    explore_gt("1.2c · Teacher HR coverage by grade level")
+}
+```
+
+```{r addon-coverage-course-grades}
+if (run_stage("01") && !is.null(course_grades_raw) &&
+    "D_stu_id" %in% names(course_grades_raw)) {
+
+  cg_cfg     <- config$add_ons$course_grades
+  core_subj  <- if (!is.null(cg_cfg$core_subjects)) cg_cfg$core_subjects
+                else c("English", "Math", "Science", "Social Studies")
+
+  # Need course coding to identify grad-required core courses
+  if (!is.null(cs_course_coding)) {
+    coding_merge <- cs_course_coding |>
+      distinct(D_course_name, C_course_subject, C_course_credit_type)
+
+    cg_coded <- course_grades_raw |>
+      left_join(coding_merge, by = "D_course_name") |>
+      filter(C_course_credit_type == "Graduation Required",
+             C_course_subject %in% core_subj,
+             !is.na(D_stu_id))
+
+    # Uniqueness check: one row per student × subject
+    cg_dupes <- cg_coded |>
+      count(D_stu_id, C_course_subject) |>
+      filter(n > 1)
+
+    data.frame(
+      measure = c("Grad-required core rows", "Distinct student × subject",
+                   "Student × subject with duplicates"),
+      value   = c(nrow(cg_coded),
+                  nrow(distinct(cg_coded, D_stu_id, C_course_subject)),
+                  nrow(cg_dupes))
+    ) |>
+      check_gt(
+        title  = "1.2d · Course grades uniqueness (grad-required core)",
+        note   = "Duplicates are resolved by worst grade in Stage 04.",
+        status = if (nrow(cg_dupes) == 0) "PASS" else "INFO")
+
+    # Coverage: what share of students in the schedule have a course grade?
+    schedule_students <- cs_raw |>
+      filter(!is.na(D_stu_id)) |>
+      distinct(D_stu_id, D_stu_grade)
+
+    cg_student_subjects <- cg_coded |>
+      distinct(D_stu_id, C_course_subject)
+
+    coverage <- schedule_students |>
+      tidyr::crossing(C_course_subject = core_subj) |>
+      mutate(has_grade = paste0(D_stu_id, C_course_subject) %in%
+               paste0(cg_student_subjects$D_stu_id, cg_student_subjects$C_course_subject)) |>
+      group_by(D_stu_grade, C_course_subject) |>
+      summarise(
+        students_in_schedule = n_distinct(D_stu_id),
+        students_with_grade  = n_distinct(D_stu_id[has_grade]),
+        pct_coverage         = round(100 * students_with_grade / students_in_schedule, 1),
+        .groups = "drop") |>
+      arrange(D_stu_grade, C_course_subject)
+
+    explore_gt(coverage, "1.2e · Course grade coverage by grade level × subject")
   }
 }
 ```
@@ -1217,7 +1319,7 @@ if (run_stage("04")) {
     if (!is.null(course_grades_raw) && !is.null(cs_course_coding)) {
       gr <- cs_require(process_course_grades(course_grades_raw, cs_course_coding, config),
                        "Course grades processed", min_rows = 0)
-      unified <- apply_course_grades(unified, gr$student_proficiency)
+      unified <- apply_course_grades(unified, gr$student_proficiency, config)
       grades_rollup <- gr$course_grades_rollup
     }
   } else {

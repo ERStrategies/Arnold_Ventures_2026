@@ -274,7 +274,7 @@ chk_info("Spells entirely outside the school year", nrow(outside),
            count(D_year, C_spell_before_window, C_spell_after_window,
                         name = "n_rows"))
 
-outside |> arrange(M_days_enrolled) |> head(20)
+outside |> arrange(M_days_enrolled) |> head(20) |> print(width = Inf)
 ```
 
 ```{r stu-negative-treatment}
@@ -392,14 +392,16 @@ chk_info("Rows at in-scope schools",
 stu |>
   filter(C_credit_recovery_site) |>
   count(C_location_id, C_location_name, C_location_name_canonical,
-               C_school_in_scope, name = "n_rows")
+               C_school_in_scope, name = "n_rows") |> 
+  print(width = Inf)
 ```
 
 ```{r stu-inscope-table}
 stu |>
   filter(C_school_in_scope) |>
   count(C_location_id, C_location_name_canonical, name = "n_rows") |>
-  arrange(C_location_name_canonical)
+  arrange(C_location_name_canonical) |> 
+  print(width = Inf)
 ```
 
 ### Which schools exist in which years
@@ -419,7 +421,7 @@ school_presence <- check_school_year_coverage(
   year_col = "D_year", include_ids = included_location_ids,
   expectations = config$cohort$school_year_expectations)
 
-school_presence
+explore_gt(school_presence)
 ```
 
 James Lawson should now show enrolment in all four years — 2022 and 2023 from
@@ -495,7 +497,8 @@ stu_cleaned |>
                 !!sym(config$grade_level_names$demographics),
                 D_stu_enter_date, D_stu_exit_date, C_exit_date_imputed,
                 M_days_enrolled, C_school_in_scope) |>
-  arrange(D_stu_id, D_year)
+  arrange(D_stu_id, D_year) |> 
+  print(width = Inf)
 ```
 
 ---

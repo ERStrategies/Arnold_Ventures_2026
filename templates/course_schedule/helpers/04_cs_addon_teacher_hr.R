@@ -86,5 +86,13 @@ apply_teacher_hr <- function(x, hr_data, config) {
     experience = teacher_hr_experience(hr_data, config),
     evaluation = teacher_hr_evaluation(hr_data, config),
     stop("Unknown teacher_hr mode: '", hr$mode, "' (use licensure | experience | evaluation)"))
+
+  # Enforce one row per employee; warn if duplicates are dropped
+  n_before <- nrow(derived)
+  derived  <- distinct(derived, D_employee_id, .keep_all = TRUE)
+  n_dupes  <- n_before - nrow(derived)
+  if (n_dupes > 0)
+    warning("teacher_hr: dropped ", n_dupes, " duplicate D_employee_id rows after derivation")
+
   left_join(x, derived, by = "D_employee_id")
 }

@@ -62,7 +62,7 @@ sources:
   course_schedule: { folder: raw,             file: "/0. Raw Data/Courses_Oct2024_FERPA.xlsx" }
   demographics:    { folder: raw,             file: "/0. Raw Data/Demographics_Oct2024_FERPA.xlsx" }
   teacher_hr:      { folder: raw,             file: "/0. Raw Data/HR_Aug2024_INDEMP.xlsx" }
-  course_grades:   { folder: raw,             file: null }   # TODO exists, not wired up yet
+  course_grades:   { folder: raw,             file: "/0. Raw Data/mnps_transcript_snapshot_2425.csv" } # Output from transcript template
   course_coding:   { folder: source_of_truth, file: "/mnps_course_coding_24-25.xlsx" }
   location_coding: { folder: source_of_truth, file: "/mnps_high_schools.xlsx" }
 
@@ -120,7 +120,10 @@ column_map:
   # TODO fill in once the grades file is wired up. Needed columns:
   #   D_stu_id, D_course_name, D_course_category, D_course_subject,
   #   D_stu_course_grade
-  course_grades: {}
+  course_grades:
+    D_stu_id:            D_stu_id
+    D_course_id:         D_course_id
+    D_stu_grade_raw:     D_stu_grade_raw
 
 
 # --- Intake: how was this data collected? -------------------------------------
@@ -212,6 +215,9 @@ add_ons:
 
   course_grades:
     enabled: false              # TODO the file exists; turn on when ready
+    grade_mode: percentage      # letter | percentage
+    proficiency_threshold_pct: 70  # percentage mode: >= this -> Proficient
+    join_keys: [D_stu_id]       # keys for joining proficiency onto student rollup
     credit_recovery_categories: ["Credit Recovery", "SUM Summer School", "VHS"]
     core_subjects: ["English", "Math", "Science", "Social Studies"]
 
